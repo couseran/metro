@@ -1,0 +1,15 @@
+services:
+  app:
+    image: ghcr.io/couseran/metro:main
+    restart: unless-stopped
+    networks:
+      - proxy
+    environment:
+      TZ: "Europe/Paris"
+    labels:
+      traefik.enable: true
+      traefik.http.routers.metro.rule: "Host(`metro.couseran.fr`)"
+
+networks:
+  proxy:
+    external: true
