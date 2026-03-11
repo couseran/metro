@@ -19,7 +19,7 @@
 	let value = $state(50);
 </script>
 
-<div class="h-dvh w-full flex flex-col p-4 justify-center items-center gap-2">
+<div class="h-dvh w-full flex flex-col p-4 justify-center items-center gap-2 bg-amber-500">
 	<h1 class="text-4xl font-semibold">Metro</h1>
 	<ConnectionStatus/>
 	{#if bluetoothContext.isConnected}
