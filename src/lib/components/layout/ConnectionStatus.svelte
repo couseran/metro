@@ -18,7 +18,7 @@ let bluetoothContext = getBluetoothContext()
 		>{bluetoothContext.isSupported ? "Bluetooth supported" : "Bluetooth not supported"}</CardDescription>
 	</div>
 {/snippet}
-<Card class="fixed top-4 left-4 w-full max-w-sm p-2 px-0">
+<Card class="fixed z-10 top-4 left-4 w-full max-w-sm p-2 px-0">
 	<CardContent class="px-2 flex flex-col gap-2">
 		{@render bluetoothCompatibility()}
 		{#if !bluetoothContext.isConnected}

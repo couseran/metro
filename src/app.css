@@ -118,4 +118,28 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Hard reset — no browser margin/padding bleeding into the game viewport */
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden; /* prevent scroll bars appearing on game pages */
+    background: #000;
+  }
+
+  /*
+    Pixel art rendering hint at the browser level.
+    The renderer enforces imageSmoothingEnabled = false on the canvas context —
+    this CSS rule is belt-and-suspenders for browsers that override it.
+  */
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges; /* Firefox fallback */
+  }
 }
