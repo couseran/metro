@@ -63,8 +63,11 @@ function isTileSolid(tileType: number): boolean {
 /**
  * Return the tile type at world tile coordinates (worldTX, worldTY).
  * Returns TileType.VOID for coordinates outside any loaded chunk.
+ *
+ * Exported so other world-layer modules (e.g. Autotile) can perform
+ * neighbour lookups without duplicating the chunk-addressing logic.
  */
-function getTileAt(world: WorldState, worldTX: number, worldTY: number): number {
+export function getTileAt(world: WorldState, worldTX: number, worldTY: number): number {
   const chunkX = Math.floor(worldTX / CHUNK_WIDTH);
   const chunkY = Math.floor(worldTY / CHUNK_HEIGHT);
 

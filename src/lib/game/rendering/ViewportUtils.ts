@@ -89,6 +89,16 @@ export function getViewportTileBounds(
  * and the result will be correctly positioned on screen.
  *
  * Must be balanced by a matching ctx.restore() in the caller.
+ *
+ * ── Why Math.round ───────────────────────────────────────────────────────────
+ * camera.x/y are physics floats (e.g. 128.917) so `camera.x * effectiveScale`
+ * produces a fractional value (e.g. 386.75).  A fractional translate is
+ * inherited by every subsequent drawImage call.  Even with imageSmoothingEnabled
+ * = false, the canvas UV formula `srcX = (dstPixelCenter - dstX) * (sw / dw)`
+ * maps each destination pixel back to a fractional source position, which can
+ * land just past a 16-px cell boundary and bleed one row/column of an adjacent
+ * sprite.  Rounding the translate to the nearest integer snaps the entire
+ * viewport to a pixel grid, eliminating the shared sub-pixel drift at its root.
  */
 export function applyViewportTransform(
     ctx:            CanvasRenderingContext2D,
@@ -97,7 +107,7 @@ export function applyViewportTransform(
     effectiveScale: number,
 ): void {
   ctx.translate(
-      canvas.width  / 2 - camera.x * effectiveScale,
-      canvas.height / 2 - camera.y * effectiveScale,
+      Math.round(canvas.width  / 2 - camera.x * effectiveScale),
+      Math.round(canvas.height / 2 - camera.y * effectiveScale),
   );
 }

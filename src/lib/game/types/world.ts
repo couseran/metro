@@ -45,6 +45,19 @@ export interface ChunkState {
    * compared to a nested array of objects.
    */
   tiles: Uint8Array;
+  /**
+   * Autotile bitmask cache — parallel array to `tiles`, same flat indexing.
+   *
+   * Stores the 4-neighbour bitmask (0–15, see NeighborBit in Autotile.ts) for
+   * each tile that supports autotiling.  Non-autotiled tiles store 0.
+   *
+   * This is purely derived data: it is never saved to disk and is always
+   * recomputed from `tiles` when a chunk is loaded (computeChunkVariants) or
+   * updated incrementally on tile mutation (updateVariantsAround).
+   * The renderer reads it to pick the correct sprite variant without performing
+   * any neighbour lookups itself.
+   */
+  variantCache: Uint8Array;
 }
 
 /**

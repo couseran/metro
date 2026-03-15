@@ -70,10 +70,13 @@ function collectTileObjects(
         const worldTX = originTX + localX;
         if (worldTX < vp.minTX || worldTX >= vp.maxTX) continue;
 
-        const tileType = chunk.tiles[localY * CHUNK_WIDTH + localX];
+        const i        = localY * CHUNK_WIDTH + localX;
+        const tileType = chunk.tiles[i];
         if (getTileRenderLayer(tileType, ROOM_BUILDER_TILESET) !== 'world') continue;
 
-        const draw = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET);
+        // Read the precomputed autotile bitmask — 0 for non-autotiled tiles
+        const variant = chunk.variantCache[i];
+        const draw    = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET, variant);
         if (!draw) continue;
 
         // Sort by the bottom edge of the tile's base (ground) row.
@@ -90,14 +93,11 @@ function collectTileObjects(
         objects.push({
           sortY,
           draw(ctx, scale) {
-            ctx.drawImage(
-                img,
-                capturedDraw.sx, capturedDraw.sy, capturedDraw.sw, capturedDraw.sh,
-                capturedTX * TILE_SIZE * scale,
-                (capturedTY * TILE_SIZE + capturedDraw.yOffset) * scale,
-                capturedDraw.sw * scale,
-                capturedDraw.sh * scale,
-            );
+            const dstX = Math.round( capturedTX * TILE_SIZE                         * scale);
+            const dstY = Math.round((capturedTY * TILE_SIZE + capturedDraw.yOffset) * scale);
+            const dstW = Math.round( capturedDraw.sw                                * scale);
+            const dstH = Math.round( capturedDraw.sh                                * scale);
+            ctx.drawImage(img, capturedDraw.sx, capturedDraw.sy, capturedDraw.sw, capturedDraw.sh, dstX, dstY, dstW, dstH);
           },
         });
       }
@@ -127,8 +127,12 @@ function collectPropObjects(
     const spriteConfig = getPropSprite(prop.kind);
     if (!spriteConfig) continue;
 
-    const frame = spriteConfig.frames[0];
-    const img   = assets.images.get(frame.src);
+    // Resolve the frame set for this variant.  Connecting props (fences, pipes …)
+    // store a bitmask in prop.variant; non-connecting props always have variant 0
+    // and fall through to the default frames.
+    const frames = spriteConfig.variantFrames?.[prop.variant] ?? spriteConfig.frames;
+    const frame  = frames[0];
+    const img    = assets.images.get(frame.src);
     if (!img) {
       console.warn(`[WorldLayer] Missing prop image: ${frame.src}`);
       continue;
@@ -146,14 +150,11 @@ function collectPropObjects(
       // Sort by the bottom edge of the sprite (foot of the prop)
       sortY: worldY + frame.sh,
       draw(ctx, scale) {
-        ctx.drawImage(
-            img,
-            capturedFrame.sx, capturedFrame.sy, capturedFrame.sw, capturedFrame.sh,
-            capturedWorldX * scale,
-            capturedWorldY * scale,
-            capturedFrame.sw * scale,
-            capturedFrame.sh * scale,
-        );
+        const dstX = Math.round(capturedWorldX      * scale);
+        const dstY = Math.round(capturedWorldY      * scale);
+        const dstW = Math.round(capturedFrame.sw    * scale);
+        const dstH = Math.round(capturedFrame.sh    * scale);
+        ctx.drawImage(img, capturedFrame.sx, capturedFrame.sy, capturedFrame.sw, capturedFrame.sh, dstX, dstY, dstW, dstH);
       },
     });
   }
@@ -203,16 +204,14 @@ function collectEntityObjects(
     // Sort by the bottom of the player's physical hitbox (their feet),
     // not the bottom of the sprite — this matches the collision system's notion
     // of where the player "stands" and gives correct overlap with wall tiles.
-    sortY: renderY + PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height,
+    // The -4 avoid clipping effect when user is next to a y-long wall
+    sortY: renderY + PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height - 4,
     draw(ctx, scale) {
-      ctx.drawImage(
-          img,
-          sx, sy, sw, sh,
-          renderX * scale,
-          renderY * scale,
-          sw * scale,
-          sh * scale,
-      );
+      const dstX = Math.round(renderX * scale);
+      const dstY = Math.round(renderY * scale);
+      const dstW = Math.round(sw      * scale);
+      const dstH = Math.round(sh      * scale);
+      ctx.drawImage(img, sx, sy, sw, sh, dstX, dstY, dstW, dstH);
     },
   });
 

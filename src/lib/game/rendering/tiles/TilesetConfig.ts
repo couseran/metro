@@ -49,6 +49,22 @@ export interface TilesetConfig {
    * overlap entities (e.g. walls, tall furniture).
    */
   tileRenderLayer?: Partial<Record<number, TileRenderLayer>>;
+  /**
+   * Variant-aware sprite map for autotiled tile types.
+   *
+   * Structure: tileType → (bitmask → flat sprite index).
+   * The bitmask is the 4-neighbour value stored in ChunkState.variantCache
+   * (see NeighborBit in Autotile.ts for the bit layout).
+   *
+   * If a tile type has an entry here, the renderer first checks
+   * autoTileMap[tileType][variantBitmask] for the sprite index.
+   * If that variant is not yet mapped (value is undefined), it falls back to
+   * tileMap[tileType] so tiles always render something during development.
+   *
+   * Example — horizontal wall segment (east + west neighbours):
+   *   autoTileMap: { [TileType.WALL]: { [NeighborBit.EAST | NeighborBit.WEST]: 42 } }
+   */
+  autoTileMap?: Partial<Record<number, Partial<Record<number, number>>>>;
 }
 
 // ─── Tile override ────────────────────────────────────────────────────────────
@@ -100,14 +116,26 @@ export interface TileDrawInfo {
  * Pure function — no side effects.
  * Returns null when the tile type has no mapping and should not be drawn.
  *
+ * Variant resolution order:
+ *   1. autoTileMap[tileType][variant]  — specific autotile sprite for this bitmask
+ *   2. tileMap[tileType]               — fallback / non-autotiled default
+ *   3. null                            — tile has no mapping, skip drawing
+ *
+ * Size overrides (tileOverrides) are always keyed by tileType, not by variant,
+ * since all variants of a given tile type share the same sprite dimensions.
+ *
  * @param tileType - Integer value from the TileType const (e.g. TileType.CARPET)
- * @param config   - The tileset config containing the tileMap and optional overrides
+ * @param config   - The tileset config
+ * @param variant  - Autotile bitmask from ChunkState.variantCache (default 0)
  */
 export function getTileDrawInfo(
     tileType: number,
     config:   TilesetConfig,
+    variant:  number = 0,
 ): TileDrawInfo | null {
-  const index = config.tileMap[tileType];
+  // Prefer the variant-specific index; fall back to the generic tileMap entry
+  const autoIndex = config.autoTileMap?.[tileType]?.[variant];
+  const index     = autoIndex ?? config.tileMap[tileType];
   if (index === undefined) return null;
 
   const col      = index % config.tilesPerRow;

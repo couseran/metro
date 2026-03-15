@@ -39,6 +39,17 @@ export interface PropState {
   health: number | null;
   /** Key into the loot definition table, or null if the prop drops nothing on destruction. */
   lootTable: string | null;
+  /**
+   * Autotile/visual variant index for this prop instance.
+   *
+   * 0 = default appearance (no autotiling — single-sprite props use this always).
+   * For connecting props (fences, pipes, hedges, roads …) this is the 4-neighbour
+   * bitmask (0–15, see NeighborBit in Autotile.ts) computed at placement time.
+   * Updated incrementally whenever a neighbouring prop of the same kind is added
+   * or removed.  The renderer reads this to select the correct frame set from
+   * PropSpriteConfig.variantFrames.
+   */
+  variant: number;
   /** Prop-specific runtime data (e.g. chest contents, sign text, campfire fuel level). */
   metadata: Record<string, unknown>;
 }

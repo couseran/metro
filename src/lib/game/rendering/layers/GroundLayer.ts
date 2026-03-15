@@ -65,22 +65,28 @@ export function drawGroundLayer(
         const worldTX = originTX + localX;
         if (worldTX < vp.minTX || worldTX >= vp.maxTX) continue;
 
-        const tileType = chunk.tiles[localY * CHUNK_WIDTH + localX];
+        const i        = localY * CHUNK_WIDTH + localX;
+        const tileType = chunk.tiles[i];
 
         // Only draw 'ground' tiles here; 'world' tiles are handled by WorldLayer
         if (getTileRenderLayer(tileType, ROOM_BUILDER_TILESET) !== 'ground') continue;
 
-        const draw = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET);
+        // Read the precomputed autotile bitmask — 0 for non-autotiled tiles
+        const variant = chunk.variantCache[i];
+        const draw    = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET, variant);
         if (!draw) continue;
 
-        ctx.drawImage(
-            img,
-            draw.sx, draw.sy, draw.sw, draw.sh,
-            worldTX * TILE_SIZE * effectiveScale,
-            (worldTY * TILE_SIZE + draw.yOffset) * effectiveScale,
-            draw.sw * effectiveScale,
-            draw.sh * effectiveScale,
-        );
+        // Destination coordinates are rounded to integer pixels.
+        // Even after a rounded viewport translate, effectiveScale may be
+        // non-integer (fractional DPR × zoom), making worldTX * TILE_SIZE * scale
+        // fractional.  Rounding here prevents per-tile sub-pixel offsets that
+        // would cause the canvas UV mapping to bleed into adjacent spritesheet cells.
+        const dstX = Math.round( worldTX * TILE_SIZE                    * effectiveScale);
+        const dstY = Math.round((worldTY * TILE_SIZE + draw.yOffset)    * effectiveScale);
+        const dstW = Math.round( draw.sw                                 * effectiveScale);
+        const dstH = Math.round( draw.sh                                 * effectiveScale);
+
+        ctx.drawImage(img, draw.sx, draw.sy, draw.sw, draw.sh, dstX, dstY, dstW, dstH);
       }
     }
   }

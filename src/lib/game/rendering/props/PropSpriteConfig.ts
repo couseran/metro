@@ -37,10 +37,29 @@ export interface PropSpriteFrame {
  * Static props use a single frame. Animated props (campfire, water, etc.) use multiple.
  */
 export interface PropSpriteConfig {
-  /** At least one frame is required. Single-element array for static props. */
+  /**
+   * Default frame set — used when the prop has no variant, or its variant has no
+   * entry in variantFrames.  At least one frame is required.
+   */
   frames: [PropSpriteFrame, ...PropSpriteFrame[]];
   /** Playback speed in fps for animated props. Ignored when frames.length === 1. */
   fps?: number;
   /** Whether the animation loops. Defaults to true. */
   loop?: boolean;
+  /**
+   * Variant-specific frame overrides for connecting/autotiled props.
+   *
+   * Key is the 4-neighbour bitmask stored in PropState.variant (0–15, same
+   * encoding as tile autotiling — see NeighborBit in Autotile.ts).
+   * If the prop's variant is absent from this map, `frames` is used instead.
+   *
+   * Use this for props that visually connect to neighbours of the same kind:
+   * fences, hedges, pipes, road markings, conveyor belts, etc.
+   *
+   * Example:
+   *   variantFrames: {
+   *     [0b1010]: [{ src: '...', sx: 32, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1 }],
+   *   }
+   */
+  variantFrames?: Partial<Record<number, [PropSpriteFrame, ...PropSpriteFrame[]]>>;
 }
