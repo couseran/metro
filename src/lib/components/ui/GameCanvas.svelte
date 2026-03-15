@@ -9,7 +9,8 @@
 	import { InputModule }           from '$lib/game/engine/InputModule';
 	import { SimulationModule }      from '$lib/game/engine/SimulationModule';
 	import { RendererModule }        from '$lib/game/engine/RendererModule';
-	import { loadAssets, MANIFEST }  from '$lib/game/engine/AssetLoader';
+	import { loadAssets }            from '$lib/game/assets/AssetLoader';
+	import { MANIFEST }              from '$lib/game/assets/manifest';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 	let canvas:  HTMLCanvasElement;

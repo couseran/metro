@@ -1,6 +1,11 @@
 // src/lib/game/engine/SimulationModule.ts
 
-import type { InputEvent } from './InputModule.ts';
+import type { InputEvent }   from './InputModule';
+import type { WorldState, CameraState } from '../types/world';
+import type { PropState }    from '../types/props';
+import type { EntityId }     from '../types/primitives';
+import { createInitialWorld, SPAWN_POINT }    from '../world/WorldFactory';
+import { resolveMovement, PLAYER_HITBOX }    from '../world/TileCollision';
 import {
   type PlayerState,
   createPlayer,
@@ -15,34 +20,58 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface GameState {
-  player: PlayerState;
-  tick: number;       // monotonic tick counter — useful for determinism checks & replays
-  timestamp: number;  // accumulated simulation time in ms
+  player:           PlayerState;
+  tick:             number;       // monotonic tick counter
+  timestamp:        number;       // accumulated simulation time in ms
+
+  world:            WorldState;
+  props:            Map<EntityId, PropState>;
+  /**
+   * Spatial index: "tx,ty" → array of prop EntityIds at that tile.
+   * Rebuilt when props change — used for fast collision and interaction queries.
+   */
+  propSpatialIndex: Map<string, EntityId[]>;
+  /**
+   * Camera position in world-space pixels — tracks the player.
+   * Kept in GameState so it is deterministic, snapshotted for interpolation,
+   * and serializable alongside the rest of the simulation.
+   */
+  camera:           CameraState;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Shallow-clone GameState for prevState snapshot.
- * Player is the only entity for now — extend this as entities are added.
- * We avoid a full deep clone here for performance; each entity is responsible
- * for returning new objects on mutation (see tickPlayer).
+ * Shallow-clone GameState for the prevState snapshot used by the renderer.
+ * Only fields that change every tick need deep cloning:
+ *   - player — moves and animates each tick
+ *   - camera — follows the player each tick
+ * world and props are stable between ticks and do not need interpolation,
+ * so the renderer safely shares the same reference from both snapshots.
  */
 function cloneState(state: GameState): GameState {
   return {
     ...state,
     player: { ...state.player, animation: { ...state.player.animation } },
+    camera: { ...state.camera },
   };
+}
+
+// ─── Camera ───────────────────────────────────────────────────────────────────
+
+/**
+ * Snap camera to player position — instant follow, no lag.
+ * Replace with a lerp here when a specific camera-feel is desired.
+ */
+function tickCamera(camera: CameraState, player: PlayerState): CameraState {
+  return { ...camera, x: player.x, y: player.y };
 }
 
 // ─── Input → Velocity mapping ─────────────────────────────────────────────────
 
-const MOVE_SPEED = 55;  // px/sec
+const MOVE_SPEED = 55; // px/sec
 
-interface MovementVector {
-  vx: number;
-  vy: number;
-}
+interface MovementVector { vx: number; vy: number; }
 
 /**
  * Derive a movement vector from the current set of held keys.
@@ -74,14 +103,20 @@ export class SimulationModule {
   prevState: GameState;
 
   // Tracks which keys are currently held — rebuilt each tick from the input queue.
-  // This is separate from the event queue: events are momentary, heldKeys is continuous.
+  // Separate from the event queue: events are momentary, heldKeys is continuous.
   private heldKeys: Set<string> = new Set();
 
   constructor() {
+    const player = createPlayer(SPAWN_POINT.x, SPAWN_POINT.y);
+
     const initial: GameState = {
-      player:    createPlayer(100, 100),
-      tick:      0,
-      timestamp: 0,
+      player,
+      tick:             0,
+      timestamp:        0,
+      world:            createInitialWorld(),
+      props:            new Map(),
+      propSpatialIndex: new Map(),
+      camera:           { x: player.x, y: player.y, zoom: 1 },
     };
 
     this.state     = initial;
@@ -97,32 +132,41 @@ export class SimulationModule {
    * Order of operations:
    *   1. Snapshot previous state for renderer interpolation
    *   2. Process input events (update heldKeys, fire one-shot actions)
-   *   3. Apply continuous input (movement) to player
-   *   4. Tick all entities
+   *   3. Apply continuous input (movement)
+   *   4. Tick entities
+   *   5. Update camera
    *
    * Given identical state + inputs, this always produces identical output. (determinism)
    *
-   * @param dt     - Fixed timestep in ms (typically 16.67 — see GameLoop)
+   * @param dt     - Fixed timestep in ms (typically 16.67ms — see GameLoop)
    * @param inputs - Input events flushed from InputModule for this tick
    */
   tick(dt: number, inputs: InputEvent[]): void {
-    // 1. Snapshot — renderer interpolates between prevState and state
     this.prevState = cloneState(this.state);
 
-    // 2. Process input events
     this.applyInputEvents(inputs);
-
-    // 3. Apply continuous movement from held keys
     this.applyMovement();
 
-    // 4. Tick entities
     let { player } = this.state;
     player = tickPlayer(player, dt);
 
-    // 5. Commit new state
+    // Integrate velocity and resolve tile collisions on each axis independently.
+    // Done here (not inside tickPlayer) so collision has access to the full world state.
+    const { x, y } = resolveMovement(
+        player.x, player.y,
+        player.vx, player.vy,
+        PLAYER_HITBOX,
+        this.state.world,
+        dt,
+    );
+    player = { ...player, x, y };
+
+    const camera = tickCamera(this.state.camera, player);
+
     this.state = {
       ...this.state,
       player,
+      camera,
       tick:      this.state.tick + 1,
       timestamp: this.state.timestamp + dt,
     };
@@ -130,10 +174,6 @@ export class SimulationModule {
 
   // ─── Input processing ────────────────────────────────────────────────────────
 
-  /**
-   * Process the input event queue for this tick.
-   * Separates continuous input (held keys) from one-shot actions (keypress).
-   */
   private applyInputEvents(inputs: InputEvent[]): void {
     for (const event of inputs) {
       if (event.type === 'keydown') {
@@ -154,16 +194,11 @@ export class SimulationModule {
 
     switch (key) {
       case 'KeyF':
-        // Toggle phone
-        if (player.activity === 'phone') {
-          player = closePhone(player);
-        } else {
-          player = openPhone(player);
-        }
+        player = player.activity === 'phone' ? closePhone(player) : openPhone(player);
         break;
 
       case 'KeyE':
-        // Context-sensitive interact — stand up if seated, else interact with world
+        // Stand up if seated; future: else interact with world
         if (
             player.activity === 'sitting_1' ||
             player.activity === 'sitting_2' ||
@@ -171,27 +206,17 @@ export class SimulationModule {
         ) {
           player = standUp(player);
         }
-        // Future: else { this.interactWithWorld(player); }
         break;
 
-        // Sit for testing — remove when world interaction is implemented
-      case 'Digit1':
-        player = sit(player, 'sitting_1', 'right');
-        break;
-      case 'Digit2':
-        player = sit(player, 'sitting_2', 'left');
-        break;
-      case 'Digit3':
-        player = sit(player, 'sitting_3', 'left');
-        break;
+      // Temporary sit tests — remove when world interaction is implemented
+      case 'Digit1': player = sit(player, 'sitting_1', 'right'); break;
+      case 'Digit2': player = sit(player, 'sitting_2', 'left');  break;
+      case 'Digit3': player = sit(player, 'sitting_3', 'left');  break;
     }
 
     this.state = { ...this.state, player };
   }
 
-  /**
-   * Apply continuous movement from currently held keys.
-   */
   private applyMovement(): void {
     let { player } = this.state;
 
@@ -204,7 +229,6 @@ export class SimulationModule {
 
     const { vx, vy } = resolveMovementVector(this.heldKeys, MOVE_SPEED);
     player = setMovement(player, vx, vy);
-
     this.state = { ...this.state, player };
   }
 }
