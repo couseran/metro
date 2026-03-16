@@ -4,6 +4,7 @@
 
 import type { WorldState, ChunkState } from '../types/world';
 import { TileType }                    from '../types/world';
+import { WallVariant }                 from '../types/materials';
 import { CHUNK_WIDTH, CHUNK_HEIGHT, TILE_SIZE } from './WorldConstants';
 import { computeChunkVariants, NeighborBit }    from './Autotile';
 import { TILE_AUTOTILE_RULES }                  from './AutotileRules';
@@ -97,29 +98,48 @@ export const SPAWN_POINT = {
  * chunk streaming is implemented.
  */
 export function createInitialWorld(): WorldState {
-  const tiles        = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
-  const variantCache = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
+  const tiles         = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
+  const variantCache  = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
+  const materialTiles = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT); // all DEFAULT (0)
 
   // Floor — everything walkable by default
   tiles.fill(TileType.CARPET);
 
-  // Place one isolated wall station per bitmask value (0–15)
+  // Place one isolated wall station per bitmask value (0–15).
+  // Stations 0–7  (rows 0–1) use the DEFAULT material  → stone walls.
+  // Stations 8–15 (rows 2–3) use the WOOD    material  → wood walls.
+  // This lets every autotile shape be verified for both materials at once.
   for (let bitmask = 0; bitmask < 16; bitmask++) {
     const col = bitmask % CELL_COUNT;
     const row = Math.floor(bitmask / CELL_COUNT);
     const { cx, cy } = cellCenter(col, row);
 
+    const material: number = bitmask >= 8 ? WallVariant.WOOD : WallVariant.STONE;
+
     // Center wall — this is the tile whose variant we are testing
     tiles[cy * CHUNK_WIDTH + cx] = TileType.WALL;
+    materialTiles[cy * CHUNK_WIDTH + cx] = material;
 
     // Arm walls — placed only for the bits set in the bitmask
-    if (bitmask & NeighborBit.NORTH) tiles[(cy - 1) * CHUNK_WIDTH +  cx     ] = TileType.WALL;
-    if (bitmask & NeighborBit.EAST)  tiles[ cy      * CHUNK_WIDTH + (cx + 1)] = TileType.WALL;
-    if (bitmask & NeighborBit.SOUTH) tiles[(cy + 1) * CHUNK_WIDTH +  cx     ] = TileType.WALL;
-    if (bitmask & NeighborBit.WEST)  tiles[ cy      * CHUNK_WIDTH + (cx - 1)] = TileType.WALL;
+    if (bitmask & NeighborBit.NORTH) {
+      tiles[(cy - 1) * CHUNK_WIDTH +  cx     ] = TileType.WALL;
+      materialTiles[(cy - 1) * CHUNK_WIDTH +  cx     ] = material;
+    }
+    if (bitmask & NeighborBit.EAST) {
+      tiles[ cy      * CHUNK_WIDTH + (cx + 1)] = TileType.WALL;
+      materialTiles[ cy      * CHUNK_WIDTH + (cx + 1)] = material;
+    }
+    if (bitmask & NeighborBit.SOUTH) {
+      tiles[(cy + 1) * CHUNK_WIDTH +  cx     ] = TileType.WALL;
+      materialTiles[(cy + 1) * CHUNK_WIDTH +  cx     ] = material;
+    }
+    if (bitmask & NeighborBit.WEST) {
+      tiles[ cy      * CHUNK_WIDTH + (cx - 1)] = TileType.WALL;
+      materialTiles[ cy      * CHUNK_WIDTH + (cx - 1)] = material;
+    }
   }
 
-  const chunk: ChunkState = { chunkX: 0, chunkY: 0, tiles, variantCache };
+  const chunk: ChunkState = { chunkX: 0, chunkY: 0, tiles, variantCache, materialTiles };
 
   // Assemble the world before computing variants so that getTileAt can resolve
   // cross-chunk border queries (none here, but required by the API contract)

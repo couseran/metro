@@ -74,9 +74,10 @@ function collectTileObjects(
         const tileType = chunk.tiles[i];
         if (getTileRenderLayer(tileType, ROOM_BUILDER_TILESET) !== 'world') continue;
 
-        // Read the precomputed autotile bitmask — 0 for non-autotiled tiles
-        const variant = chunk.variantCache[i];
-        const draw    = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET, variant);
+        // Read the precomputed autotile bitmask and authored material index
+        const variant  = chunk.variantCache[i];
+        const material = chunk.materialTiles[i];
+        const draw     = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET, variant, material);
         if (!draw) continue;
 
         // Sort by the bottom edge of the tile's base (ground) row.

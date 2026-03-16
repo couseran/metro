@@ -71,9 +71,10 @@ export function drawGroundLayer(
         // Only draw 'ground' tiles here; 'world' tiles are handled by WorldLayer
         if (getTileRenderLayer(tileType, ROOM_BUILDER_TILESET) !== 'ground') continue;
 
-        // Read the precomputed autotile bitmask — 0 for non-autotiled tiles
-        const variant = chunk.variantCache[i];
-        const draw    = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET, variant);
+        // Read the precomputed autotile bitmask and authored material index
+        const variant  = chunk.variantCache[i];
+        const material = chunk.materialTiles[i];
+        const draw     = getTileDrawInfo(tileType, ROOM_BUILDER_TILESET, variant, material);
         if (!draw) continue;
 
         // Destination coordinates are rounded to integer pixels.

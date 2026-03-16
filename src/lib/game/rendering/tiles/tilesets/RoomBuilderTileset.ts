@@ -17,10 +17,19 @@
 //   2. Map each bitmask → flat index in the tile's autoTileMap entry.
 //   3. Variants that are not yet mapped fall back to tileMap automatically.
 //
+// HOW TO ADD A MATERIAL VARIANT FOR A TILE:
+//   1. Add the new material constant to TileMaterial in src/lib/game/types/materials.ts.
+//   2. Identify the sprite row(s) in the sheet that correspond to this material.
+//   3. Add a materialAutoTileMap entry:
+//        [TileType.WALL]: { [TileMaterial.MY_MATERIAL]: { 0b0000: R*17+C, … } }
+//   4. Map every bitmask whose sprite differs from the default material.
+//      Unmapped bitmasks fall back to autoTileMap[tileType][bitmask] automatically.
+//
 // TileType.VOID is intentionally absent — unloaded tiles are never drawn.
 
 import type { TilesetConfig } from '../TilesetConfig';
 import { TileType }           from '../../../types/world';
+import { WallVariant }        from '../../../types/materials';
 
 export const ROOM_BUILDER_TILESET: TilesetConfig = {
   src:         '/sprites/tilesets/Room_Builder_16x16.png',
@@ -61,25 +70,51 @@ export const ROOM_BUILDER_TILESET: TilesetConfig = {
   },
 
   autoTileMap: {
-    // Wall autotile variants — one sprite per 4-neighbour bitmask value (0–15).
+    // Wall autotile variants (DEFAULT / stone material) — one sprite per bitmask (0–15).
     // Bitmask bits: NORTH=1, EAST=2, SOUTH=4, WEST=8 (see NeighborBit in Autotile.ts).
     [TileType.WALL]: {
-      0b0000: 13*17+1,  // 0  — isolated pillar         (no neighbours)
-      0b0001: 13*17+3,  // 1  — dead end, open south     (N only)
-      0b0010: 13*17,  // 2  — dead end, open west      (E only)
-      0b0011: 13*17+7,  // 3  — corner NE                (N + E)
-      0b0100: 17+16,  // 4  — dead end, open north     (S only)
-      0b0101: 17+15,  // 5  — vertical segment         (N + S)
-      0b0110: 16,  // 6  — corner SE                (E + S)
-      0b0111: 17+15, // 7  — T-junction, open west    (N + E + S)
-      0b1000: 13*17+2,  // 8  — dead end, open east      (W only)
-      0b1001: 13*17+9,  // 9  — corner NW                (N + W)
-      0b1010: 13*17+1,  // 10 — horizontal segment       (E + W)
-      0b1011: 13*17+8,  // 11 — T-junction, open south   (N + E + W)
-      0b1100: 14,      // 12 — corner SW                (S + W)
-      0b1101: 17+15, // 13 — T-junction, open east    (N + S + W)
-      0b1110: 15,      // 14 — T-junction, open north   (E + S + W)
-      0b1111: 17+15,  // 15 — cross / fully surrounded (all 4 neighbours)
+      0b0000: 13*17+1,  //  0 — isolated pillar          (no neighbours)
+      0b0001: 13*17+3,  //  1 — dead end, open south      (N only)
+      0b0010: 13*17+0,  //  2 — dead end, open west       (E only)
+      0b0011: 13*17+7,  //  3 — corner NE                 (N + E)
+      0b0100: 17+16,    //  4 — dead end, open north      (S only)
+      0b0101: 17+15,    //  5 — vertical segment          (N + S)
+      0b0110: 16,       //  6 — corner SE                 (E + S)
+      0b0111: 17+15,    //  7 — T-junction, open west     (N + E + S)
+      0b1000: 13*17+2,  //  8 — dead end, open east       (W only)
+      0b1001: 13*17+9,  //  9 — corner NW                 (N + W)
+      0b1010: 13*17+1,  // 10 — horizontal segment        (E + W)
+      0b1011: 13*17+8,  // 11 — T-junction, open south    (N + E + W)
+      0b1100: 14,       // 12 — corner SW                 (S + W)
+      0b1101: 17+15,    // 13 — T-junction, open east     (N + S + W)
+      0b1110: 15,       // 14 — T-junction, open north    (E + S + W)
+      0b1111: 17+15,    // 15 — cross / fully surrounded  (all 4 neighbours)
+    },
+  },
+
+  materialAutoTileMap: {
+    // ── WALL material variants ────────────────────────────────────────────────
+    //
+    // Wall sprites are laid out in the sheet with one material per row-pair.
+    // Default (stone) uses row 13 as the pillar/corner base row.
+    // Wood uses row 11 as its equivalent base row.
+    //
+    // Bitmasks 4–7 and 12–15 (shapes involving S or SW arms) reference rows 0–1
+    // in the stone variant; their wood equivalents are not yet identified in the
+    // sheet so they fall back to the stone shape via autoTileMap.
+    [TileType.WALL]: {
+      [WallVariant.WOOD]: {
+        0b0000: 11*17+1,  //  0 — isolated pillar          (no neighbours)
+        0b0001: 11*17+3,  //  1 — dead end, open south      (N only)
+        0b0010: 11*17+0,  //  2 — dead end, open west       (E only)
+        0b0011: 11*17+7,  //  3 — corner NE                 (N + E)
+        // 0b0100 → 0b0111: TODO — identify wood sprites for S-arm shapes in sheet
+        0b1000: 11*17+2,  //  8 — dead end, open east       (W only)
+        0b1001: 11*17+9,  //  9 — corner NW                 (N + W)
+        0b1010: 11*17+1,  // 10 — horizontal segment        (E + W)
+        0b1011: 11*17+8,  // 11 — T-junction, open south    (N + E + W)
+        // 0b1100 → 0b1111: TODO — identify wood sprites for SW-arm shapes in sheet
+      },
     },
   },
 };

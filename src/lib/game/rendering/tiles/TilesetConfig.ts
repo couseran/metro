@@ -53,18 +53,44 @@ export interface TilesetConfig {
    * Variant-aware sprite map for autotiled tile types.
    *
    * Structure: tileType → (bitmask → flat sprite index).
-   * The bitmask is the 4-neighbour value stored in ChunkState.variantCache
-   * (see NeighborBit in Autotile.ts for the bit layout).
+   * The bitmask is the value stored in ChunkState.variantCache (see Autotile.ts).
    *
-   * If a tile type has an entry here, the renderer first checks
-   * autoTileMap[tileType][variantBitmask] for the sprite index.
-   * If that variant is not yet mapped (value is undefined), it falls back to
-   * tileMap[tileType] so tiles always render something during development.
+   * Defines the DEFAULT material (material 0) appearance.  If a tile type has
+   * an entry here, the renderer uses autoTileMap[tileType][bitmask] when no
+   * material-specific override exists in materialAutoTileMap.
+   * Falls back to tileMap[tileType] when the bitmask is not mapped, so tiles
+   * always render something during development.
    *
-   * Example — horizontal wall segment (east + west neighbours):
+   * Bitmask range depends on the tile's autotile mode (see AutotileRules.ts):
+   *   • 4-neighbour mode: 0–15  (lower nibble, cardinal bits only)
+   *   • 8-neighbour/blob mode: 0–255, but only 47 values are meaningful —
+   *     corner bits (upper nibble) are masked by adjacent cardinals.
+   *
+   * Example — horizontal wall segment (east + west, 4-neighbour mode):
    *   autoTileMap: { [TileType.WALL]: { [NeighborBit.EAST | NeighborBit.WEST]: 42 } }
    */
   autoTileMap?: Partial<Record<number, Partial<Record<number, number>>>>;
+  /**
+   * Material-aware variant sprite map for tile types that support visual variants.
+   *
+   * Structure: tileType → materialIndex → (bitmask → flat sprite index).
+   *
+   * The renderer checks this map first when a tile has a non-zero material.
+   * Any bitmask absent from a material's entry falls back to autoTileMap[tileType][bitmask]
+   * (default material shape), then to tileMap[tileType] as a final fallback.
+   *
+   * Material indices are defined in TileMaterial (src/lib/game/types/materials.ts).
+   * Material 0 (DEFAULT) is intentionally absent here — it is fully described
+   * by autoTileMap above.
+   *
+   * Example — wood wall variant (material 1) for all 16 bitmasks:
+   *   materialAutoTileMap: {
+   *     [TileType.WALL]: {
+   *       [TileMaterial.WOOD]: { 0b0000: 188, 0b0001: 190, … }
+   *     }
+   *   }
+   */
+  materialAutoTileMap?: Partial<Record<number, Partial<Record<number, Partial<Record<number, number>>>>>>;
 }
 
 // ─── Tile override ────────────────────────────────────────────────────────────
@@ -116,26 +142,30 @@ export interface TileDrawInfo {
  * Pure function — no side effects.
  * Returns null when the tile type has no mapping and should not be drawn.
  *
- * Variant resolution order:
- *   1. autoTileMap[tileType][variant]  — specific autotile sprite for this bitmask
- *   2. tileMap[tileType]               — fallback / non-autotiled default
- *   3. null                            — tile has no mapping, skip drawing
+ * Sprite resolution order (first match wins):
+ *   1. materialAutoTileMap[tileType][material][variant]  — material + shape variant
+ *   2. autoTileMap[tileType][variant]                    — default material, shape variant
+ *   3. tileMap[tileType]                                 — static fallback sprite
+ *   4. null                                              — no mapping, skip drawing
  *
- * Size overrides (tileOverrides) are always keyed by tileType, not by variant,
- * since all variants of a given tile type share the same sprite dimensions.
+ * Size overrides (tileOverrides) are keyed by tileType only, since all
+ * materials and shape variants of a tile type share the same sprite dimensions.
  *
  * @param tileType - Integer value from the TileType const (e.g. TileType.CARPET)
  * @param config   - The tileset config
  * @param variant  - Autotile bitmask from ChunkState.variantCache (default 0)
+ * @param material - Visual material index from ChunkState.materialTiles (default 0)
  */
 export function getTileDrawInfo(
     tileType: number,
     config:   TilesetConfig,
     variant:  number = 0,
+    material: number = 0,
 ): TileDrawInfo | null {
-  // Prefer the variant-specific index; fall back to the generic tileMap entry
-  const autoIndex = config.autoTileMap?.[tileType]?.[variant];
-  const index     = autoIndex ?? config.tileMap[tileType];
+  // Prefer the material+variant-specific index, then shape-only, then the static fallback
+  const matAutoIndex = config.materialAutoTileMap?.[tileType]?.[material]?.[variant];
+  const autoIndex    = matAutoIndex ?? config.autoTileMap?.[tileType]?.[variant];
+  const index        = autoIndex ?? config.tileMap[tileType];
   if (index === undefined) return null;
 
   const col      = index % config.tilesPerRow;

@@ -58,6 +58,20 @@ export interface ChunkState {
    * any neighbour lookups itself.
    */
   variantCache: Uint8Array;
+  /**
+   * Visual material index — parallel array to `tiles`, same flat indexing.
+   *
+   * Determines which sprite palette/row is used for a tile that supports
+   * material variants.  Two tiles of the same TileType with different materials
+   * are identical in collision, passability, and audio — only the sprite differs.
+   *
+   * Values are TileMaterial constants (see src/lib/game/types/materials.ts).
+   * 0 (TileMaterial.DEFAULT) is always the fallback — all tile types render
+   * correctly with material 0 even if no materialAutoTileMap entry exists.
+   *
+   * Persisted alongside `tiles` (it is authored data, not derived).
+   */
+  materialTiles: Uint8Array;
 }
 
 /**

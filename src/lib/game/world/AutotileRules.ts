@@ -6,19 +6,28 @@
 // connection rules can grow — new tile types, connection groups, cross-type
 // connections — without touching the core bitmask machinery.
 //
-// ── Adding a new autotiled tile type ─────────────────────────────────────────
+// ── Adding a 4-neighbour tile (no corners) ───────────────────────────────────
 //
-//   1. Add an entry to TILE_AUTOTILE_RULES below.
-//   2. Map the 16 bitmask values (0–15) to sprite indices in the matching
-//      tileset config's autoTileMap (see RoomBuilderTileset.ts).
+//   Use the bare function shorthand.  The bitmask will be 0–15.
+//   Map those 16 values to sprite indices in the tileset's autoTileMap.
+//
+//     [TileType.WALL]: (n) => n === TileType.WALL,
+//
+// ── Adding an 8-neighbour / blob tile (with corners) ─────────────────────────
+//
+//   Use the object form with corners: true.  The bitmask will be 0–255
+//   (47 meaningful values under the blob masking rule).
+//   Map those values to sprite indices in the tileset's autoTileMap.
+//
+//     [TileType.WATER]: { connects: (n) => n === TileType.WATER, corners: true },
 //
 // ── Connection groups ────────────────────────────────────────────────────────
 //
-//   If two tile types should visually merge (e.g. a stone wall and a stone
-//   archway tile), make both predicates accept the other type:
+//   If two tile types should visually merge (e.g. stone wall and stone arch),
+//   make both predicates accept the other type:
 //
-//     [TileType.WALL]:   (n) => n === TileType.WALL || n === TileType.ARCH,
-//     [TileType.ARCH]:   (n) => n === TileType.ARCH || n === TileType.WALL,
+//     [TileType.WALL]: (n) => n === TileType.WALL || n === TileType.ARCH,
+//     [TileType.ARCH]: (n) => n === TileType.ARCH || n === TileType.WALL,
 
 import type { TilePredicateMap } from './Autotile';
 import { TileType }              from '../types/world';
