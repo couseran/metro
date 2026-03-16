@@ -30,7 +30,7 @@ export const ROOM_BUILDER_TILESET: TilesetConfig = {
 
   tileMap: {
     // col 15, row 10  →  10 * 17 + 15 = 185
-    [TileType.CARPET]: 185,
+    [TileType.CARPET]: 10*17+15,
 
     // col 1,  row 6   →  6  * 17 + 1  = 103
     // Sprite is 16×32 (spans two tile rows in the image).
@@ -64,18 +64,18 @@ export const ROOM_BUILDER_TILESET: TilesetConfig = {
     // Wall autotile variants — one sprite per 4-neighbour bitmask value (0–15).
     // Bitmask bits: NORTH=1, EAST=2, SOUTH=4, WEST=8 (see NeighborBit in Autotile.ts).
     [TileType.WALL]: {
-      0b0000: 17*17+1,  // 0  — isolated pillar         (no neighbours)
-      0b0001: 17*17+3,  // 1  — dead end, open south     (N only)
-      0b0010: 17*17,  // 2  — dead end, open west      (E only)
-      0b0011: 17*17+7,  // 3  — corner NE                (N + E)
+      0b0000: 13*17+1,  // 0  — isolated pillar         (no neighbours)
+      0b0001: 13*17+3,  // 1  — dead end, open south     (N only)
+      0b0010: 13*17,  // 2  — dead end, open west      (E only)
+      0b0011: 13*17+7,  // 3  — corner NE                (N + E)
       0b0100: 17+16,  // 4  — dead end, open north     (S only)
       0b0101: 17+15,  // 5  — vertical segment         (N + S)
       0b0110: 16,  // 6  — corner SE                (E + S)
       0b0111: 17+15, // 7  — T-junction, open west    (N + E + S)
-      0b1000: 17*17+2,  // 8  — dead end, open east      (W only)
-      0b1001: 17*17+9,  // 9  — corner NW                (N + W)
-      0b1010: 17*17+1,  // 10 — horizontal segment       (E + W)
-      0b1011: 17*17+8,  // 11 — T-junction, open south   (N + E + W)
+      0b1000: 13*17+2,  // 8  — dead end, open east      (W only)
+      0b1001: 13*17+9,  // 9  — corner NW                (N + W)
+      0b1010: 13*17+1,  // 10 — horizontal segment       (E + W)
+      0b1011: 13*17+8,  // 11 — T-junction, open south   (N + E + W)
       0b1100: 14,      // 12 — corner SW                (S + W)
       0b1101: 17+15, // 13 — T-junction, open east    (N + S + W)
       0b1110: 15,      // 14 — T-junction, open north   (E + S + W)
