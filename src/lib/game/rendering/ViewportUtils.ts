@@ -90,15 +90,27 @@ export function getViewportTileBounds(
  *
  * Must be balanced by a matching ctx.restore() in the caller.
  *
- * ── Why Math.round ───────────────────────────────────────────────────────────
- * camera.x/y are physics floats (e.g. 128.917) so `camera.x * effectiveScale`
- * produces a fractional value (e.g. 386.75).  A fractional translate is
- * inherited by every subsequent drawImage call.  Even with imageSmoothingEnabled
- * = false, the canvas UV formula `srcX = (dstPixelCenter - dstX) * (sw / dw)`
- * maps each destination pixel back to a fractional source position, which can
- * land just past a 16-px cell boundary and bleed one row/column of an adjacent
- * sprite.  Rounding the translate to the nearest integer snaps the entire
- * viewport to a pixel grid, eliminating the shared sub-pixel drift at its root.
+ * ── Rounding strategy ────────────────────────────────────────────────────────
+ * camera.x/y are physics floats, so `camera.x * effectiveScale` is fractional.
+ * A fractional ctx.translate is inherited by every drawImage call, which causes
+ * sub-pixel UV drift and sprite-sheet bleeding.
+ *
+ * Two pitfalls to avoid:
+ *
+ * 1. Round the FULL expression (Math.round(C - Ps)):
+ *      The entity renderer also rounds its own draw position (Math.round(Ps)).
+ *      These two independent rounds of the same float cross their 0.5 threshold
+ *      at different moments, so the player oscillates ±1 px relative to the
+ *      tile background every time Ps crosses a half-pixel — visible as shake.
+ *
+ * 2. Use a fractional canvas center (canvas.width / 2 when width is odd):
+ *      Subtracting a rounded Ps from a fractional C still leaves a fractional
+ *      translate, reintroducing the UV drift.
+ *
+ * Correct approach: snap only Ps to an integer first, then subtract from an
+ * integer center.  The entity renderer's Math.round(Ps) produces the same
+ * integer, so the two operations cancel exactly and the player is always at
+ * pixel-perfect center with no frame-to-frame jitter.
  */
 export function applyViewportTransform(
     ctx:            CanvasRenderingContext2D,
@@ -106,8 +118,12 @@ export function applyViewportTransform(
     camera:         CameraState,
     effectiveScale: number,
 ): void {
+  // Integer canvas center (bit-shift avoids 0.5 on odd canvas sizes)
+  const cx = canvas.width  >> 1;
+  const cy = canvas.height >> 1;
+
   ctx.translate(
-      Math.round(canvas.width  / 2 - camera.x * effectiveScale),
-      Math.round(canvas.height / 2 - camera.y * effectiveScale),
+      cx - Math.round(camera.x * effectiveScale),
+      cy - Math.round(camera.y * effectiveScale),
   );
 }
