@@ -3,7 +3,7 @@
 // Bitmask autotiling — computes which sprite variant a tile should display
 // based on which of its neighbours are of a "connecting" type.
 //
-// Two modes are supported, chosen per tile type in AutotileRules.ts:
+// Three modes are supported, chosen per tile type in AutotileRules.ts:
 //
 // ── 4-neighbour mode (default) ────────────────────────────────────────────────
 //
@@ -15,7 +15,7 @@
 //       WEST (bit 3 = 8) · EAST (bit 1 = 2)
 //              SOUTH (bit 2 = 4)
 //
-// ── 8-neighbour / blob mode ───────────────────────────────────────────────────
+// ── 8-neighbour / blob mode ('blob') ─────────────────────────────────────────
 //
 //   Checks all 8 neighbours.  Diagonal (corner) bits are placed in the upper
 //   nibble and are subject to the "blob masking" rule: a corner bit is only
@@ -23,21 +23,33 @@
 //   the theoretical 256 combinations down to 47 meaningful ones — the industry-
 //   standard "blob tileset" layout used in RPG Maker, Tiled, and similar tools.
 //
-//   Full 8-bit layout:
-//
 //       NW (bit 7 = 128) · NORTH (bit 0 =  1) · NE (bit 4 =  16)
 //       WEST (bit 3 =  8)  ·  tile  ·  EAST (bit 1 =   2)
 //       SW (bit 6 =  64) · SOUTH (bit 2 =  4) · SE (bit 5 =  32)
 //
 //   Corner bits are only set when both adjacent cardinals are set:
-//     NE (16) ← N (1)  AND E (2)  AND NE neighbour connects
-//     SE (32) ← E (2)  AND S (4)  AND SE neighbour connects
-//     SW (64) ← S (4)  AND W (8)  AND SW neighbour connects
-//     NW(128) ← W (8)  AND N (1)  AND NW neighbour connects
+//     NE (16) ← N AND E AND NE connects
+//     SE (32) ← E AND S AND SE connects
+//     SW (64) ← S AND W AND SW connects
+//     NW(128) ← W AND N AND NW connects
+//
+// ── 8-neighbour / independent mode ('independent') ───────────────────────────
+//
+//   Checks all 8 neighbours independently — no gating on adjacent cardinals.
+//   A diagonal bit is set whenever that diagonal neighbour connects, regardless
+//   of the cardinal neighbours.  Produces up to 256 bitmask values.
+//
+//   Use this for effect tiles (shadows, overlays) where a lone diagonal
+//   neighbour should be detectable on its own.  In combination with autoTileMask,
+//   only the relevant directions need entries in the autoTileMap.
+//
+//   Example — carpet shadow: connects to WALL, corners: 'independent',
+//     mask = N|W|NW.  A wall only at NW produces bitmask 128 and shows the
+//     inner-corner shadow sprite even without cardinal walls present.
 //
 // ── Backward compatibility ────────────────────────────────────────────────────
 //
-//   The lower-nibble cardinal bits (0–15) are identical in both modes.
+//   The lower-nibble cardinal bits (0–15) are identical in all three modes.
 //   All existing autoTileMap entries keyed on 4-bit bitmasks remain valid
 //   when a tile type uses 4-neighbour mode.
 //
@@ -53,9 +65,14 @@
 //     TILE_AUTOTILE_RULES: { [TileType.FOO]: (n) => n === TileType.FOO }
 //     autoTileMap: map bitmask values 0–15 → sprite index.
 //
-//   8-neighbour (with corners):
-//     TILE_AUTOTILE_RULES: { [TileType.FOO]: { connects: (n) => …, corners: true } }
-//     autoTileMap: map the 47 meaningful bitmask values (0–255) → sprite index.
+//   8-neighbour blob (terrain merging):
+//     TILE_AUTOTILE_RULES: { [TileType.FOO]: { connects: (n) => …, corners: 'blob' } }
+//     autoTileMap: map the 47 meaningful bitmask values → sprite index.
+//
+//   8-neighbour independent (effect / shadow detection):
+//     TILE_AUTOTILE_RULES: { [TileType.FOO]: { connects: (n) => …, corners: 'independent' } }
+//     autoTileMask: restrict to relevant bits to limit the number of entries needed.
+//     autoTileMap: map the relevant masked bitmask values → sprite index.
 
 import type { WorldState, ChunkState } from '../types/world';
 import { getTileAt }                   from './TileCollision';
@@ -66,12 +83,11 @@ import { CHUNK_WIDTH, CHUNK_HEIGHT }   from './WorldConstants';
 /**
  * Bit flags for all 8 neighbours used in autotiling.
  *
- * The 4 cardinal bits occupy the lower nibble (0–15), identical to the
- * classic 4-neighbour encoding — all existing autoTileMap entries remain valid.
- *
- * The 4 diagonal bits occupy the upper nibble (16–128) and are only ever set
- * in 8-neighbour (blob) mode, subject to the masking rule:
- *   a diagonal bit is set only when BOTH adjacent cardinals are also set.
+ * The 4 cardinal bits occupy the lower nibble (0–15), identical in all modes.
+ * The 4 diagonal bits occupy the upper nibble (16–128):
+ *   • In 'blob' mode: only set when BOTH adjacent cardinals are also set.
+ *   • In 'independent' mode: set whenever the diagonal neighbour connects,
+ *     regardless of cardinal neighbours.
  *
  * Layout:
  *   NW (128) · N (1) · NE (16)
@@ -79,13 +95,13 @@ import { CHUNK_WIDTH, CHUNK_HEIGHT }   from './WorldConstants';
  *   SW (64)  · S (4) · SE (32)
  */
 export const NeighborBit = {
-  // Cardinal (lower nibble) — same as original 4-neighbour layout
+  // Cardinal (lower nibble) — same in all autotile modes
   NORTH:      1 << 0,  //   1
   EAST:       1 << 1,  //   2
   SOUTH:      1 << 2,  //   4
   WEST:       1 << 3,  //   8
 
-  // Diagonal (upper nibble) — blob mode only, gated by adjacent cardinals
+  // Diagonal (upper nibble) — behaviour depends on CornerMode
   NORTH_EAST: 1 << 4,  //  16
   SOUTH_EAST: 1 << 5,  //  32
   SOUTH_WEST: 1 << 6,  //  64
@@ -95,32 +111,45 @@ export const NeighborBit = {
 // ─── Rule types ───────────────────────────────────────────────────────────────
 
 /**
- * Full autotile rule for a tile type that needs 8-neighbour (blob) evaluation.
+ * How diagonal (corner) neighbours are evaluated.
  *
- * Use this object form only when corners are required.  For tiles that only
- * need 4-cardinal neighbours, use the bare function shorthand instead —
- * it requires no extra syntax and produces a smaller, simpler autoTileMap.
+ *   'blob'        — Standard blob tileset rule: a diagonal bit is only set
+ *                   when BOTH adjacent cardinal neighbours also connect.
+ *                   Produces at most 47 meaningful bitmask values.
+ *                   Use for terrain tiles that should merge smoothly (water, grass…).
+ *
+ *   'independent' — All 8 directions are checked independently without any
+ *                   gating.  Produces up to 256 bitmask values.
+ *                   Use for effect tiles (shadows, overlays) where a lone
+ *                   diagonal neighbour must be detectable on its own.
+ */
+export type CornerMode = 'blob' | 'independent';
+
+/**
+ * Full autotile rule for a tile type that needs 8-neighbour evaluation.
+ *
+ * Use the bare function shorthand for 4-cardinal-only tiles — it requires
+ * no extra syntax and the autoTileMap only needs 16 entries (0–15).
  */
 export interface TileAutotileRule {
   /** Returns true when a given neighbouring tile type should visually connect. */
   connects: (neighborTileType: number) => boolean;
-  /**
-   * Enable 8-neighbour (blob) evaluation.
-   * Corner bits are masked by adjacent cardinals (see file header).
-   * The resulting bitmask is 0–255 with at most 47 meaningful values.
-   */
-  corners: true;
+  /** Diagonal evaluation mode — see CornerMode. */
+  corners: CornerMode;
 }
 
 /**
  * Either a bare predicate (4-neighbour, no boilerplate) or a full rule object
  * (8-neighbour with corners).
  *
- * Bare function shorthand:
+ * Bare function — 4-neighbour, bitmask 0–15:
  *   { [TileType.WALL]: (n) => n === TileType.WALL }
  *
- * Object form for corner-aware tiles:
- *   { [TileType.WATER]: { connects: (n) => n === TileType.WATER, corners: true } }
+ * Object form — blob mode, bitmask 0–255 (47 meaningful values):
+ *   { [TileType.WATER]: { connects: (n) => n === TileType.WATER, corners: 'blob' } }
+ *
+ * Object form — independent mode, all 8 directions ungated:
+ *   { [TileType.CARPET]: { connects: (n) => n === TileType.WALL, corners: 'independent' } }
  */
 export type TilePredicateEntry =
   | ((neighborTileType: number) => boolean)
@@ -135,10 +164,10 @@ export type TilePredicateMap = Partial<Record<number, TilePredicateEntry>>;
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Normalise a TilePredicateEntry to a full rule object. */
-function resolveRule(entry: TilePredicateEntry): { connects: (n: number) => boolean; corners: boolean } {
+function resolveRule(entry: TilePredicateEntry): { connects: (n: number) => boolean; corners: CornerMode | undefined } {
   return typeof entry === 'function'
-      ? { connects: entry, corners: false }
-      : { connects: entry.connects, corners: true };
+      ? { connects: entry, corners: undefined }
+      : { connects: entry.connects, corners: entry.corners };
 }
 
 /** Return the chunk that contains world tile (tx, ty), or null if not loaded. */
@@ -153,24 +182,24 @@ function getChunkForTile(world: WorldState, tx: number, ty: number): ChunkState 
 /**
  * Compute the autotile bitmask for a single tile at world tile coordinates (tx, ty).
  *
- * In 4-neighbour mode (`corners = false`, the default) the result is 0–15.
- * In 8-neighbour mode (`corners = true`) the result is 0–255, with diagonal
- * bits only set when both adjacent cardinal neighbours also connect (blob rule).
+ * In 4-neighbour mode (`corners` undefined) the result is 0–15.
+ * In 'blob' mode the result is 0–255 with at most 47 meaningful values.
+ * In 'independent' mode the result is 0–255 with up to 256 possible values.
  *
  * @param world    - Full world state (for cross-chunk tile lookups)
  * @param tx       - World tile X of the tile being evaluated
  * @param ty       - World tile Y of the tile being evaluated
  * @param connects - Returns true if the given neighbour type should connect
- * @param corners  - When true, evaluate diagonal neighbours under the blob rule
+ * @param corners  - Corner evaluation mode; undefined = 4-cardinal only
  */
 export function computeTileBitmask(
     world:    WorldState,
     tx:       number,
     ty:       number,
     connects: (neighborTileType: number) => boolean,
-    corners:  boolean = false,
+    corners?: CornerMode,
 ): number {
-  // Evaluate the 4 cardinal neighbours first — always needed
+  // Evaluate the 4 cardinal neighbours — always needed
   const n = connects(getTileAt(world, tx,     ty - 1));
   const e = connects(getTileAt(world, tx + 1, ty    ));
   const s = connects(getTileAt(world, tx,     ty + 1));
@@ -182,13 +211,18 @@ export function computeTileBitmask(
   if (s) mask |= NeighborBit.SOUTH;
   if (w) mask |= NeighborBit.WEST;
 
-  // Diagonal neighbours — only evaluated in blob mode, and only when both
-  // adjacent cardinals connect (masking rule keeps the 47-combination invariant)
-  if (corners) {
+  if (corners === 'blob') {
+    // Standard blob rule: diagonal only fires when both adjacent cardinals connect
     if (n && e && connects(getTileAt(world, tx + 1, ty - 1))) mask |= NeighborBit.NORTH_EAST;
     if (e && s && connects(getTileAt(world, tx + 1, ty + 1))) mask |= NeighborBit.SOUTH_EAST;
     if (s && w && connects(getTileAt(world, tx - 1, ty + 1))) mask |= NeighborBit.SOUTH_WEST;
     if (w && n && connects(getTileAt(world, tx - 1, ty - 1))) mask |= NeighborBit.NORTH_WEST;
+  } else if (corners === 'independent') {
+    // Independent mode: each diagonal is checked unconditionally
+    if (connects(getTileAt(world, tx + 1, ty - 1))) mask |= NeighborBit.NORTH_EAST;
+    if (connects(getTileAt(world, tx + 1, ty + 1))) mask |= NeighborBit.SOUTH_EAST;
+    if (connects(getTileAt(world, tx - 1, ty + 1))) mask |= NeighborBit.SOUTH_WEST;
+    if (connects(getTileAt(world, tx - 1, ty - 1))) mask |= NeighborBit.NORTH_WEST;
   }
 
   return mask;
@@ -245,15 +279,15 @@ export function computeChunkVariants(
  *
  * Call this whenever a tile is placed or removed at world tile coordinates
  * (worldTX, worldTY).  Refreshing all 9 positions (the changed tile plus all
- * 8 surrounding tiles) handles both 4-neighbour and 8-neighbour (blob) modes:
+ * 8 surrounding tiles) handles all three autotile modes correctly:
  *
- * • In 4-neighbour mode the 4 diagonal positions compute to the same result
- *   they had before (no cardinal changed for them), so the extra 4 lookups
- *   are safe no-ops with negligible overhead.
+ * • 4-neighbour: the 4 diagonal positions recompute to the same result as
+ *   before (no cardinal changed for them) — safe no-ops with negligible overhead.
  *
- * • In 8-neighbour mode, a diagonal neighbour's corner bit can change when T
- *   changes because T is that diagonal's own diagonal — the full 3×3 sweep
- *   is necessary for correctness.
+ * • 'blob' mode: diagonal neighbours whose corner bit depends on T are refreshed.
+ *
+ * • 'independent' mode: diagonal neighbours can have their corner bit changed
+ *   directly by T's presence, requiring the full 3×3 sweep.
  *
  * The variantCache arrays are mutated in place — they are purely derived
  * data, not primary simulation state, so in-place updates are safe.
@@ -269,9 +303,6 @@ export function updateVariantsAround(
     worldTY:    number,
     predicates: TilePredicateMap,
 ): void {
-  // Full 3×3 grid centred on the mutated tile.
-  // Diagonal positions are included so that corner bits in blob-mode tiles
-  // are refreshed correctly when T enters or leaves their neighbourhood.
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
       const tx = worldTX + dx;

@@ -48,11 +48,15 @@ export type WallVariantValue = typeof WallVariant[keyof typeof WallVariant];
 
 /**
  * Visual variant indices for TileType.CARPET.
- * Extend with named colour/pattern entries as the tileset is mapped.
+ *
+ * Each variant has its own base sprite (no-shadow state, bitmask 0) plus
+ * shadow overlay sprites for each relevant shadow bitmask (see RoomBuilderTileset
+ * materialAutoTileMap and the CARPET autoTileMask entry).
  */
 export const CarpetVariant = {
-  DEFAULT: 0,
-  // Future: RED: 1, BLUE: 2, GREEN: 3, …
+  SMOOTH:   0,  // Plain / default — no pattern, used as the universal fallback
+  STRIPE_V: 1,  // Vertical stripes
+  STRIPE_H: 2,  // Horizontal stripes
 } as const;
 
 export type CarpetVariantValue = typeof CarpetVariant[keyof typeof CarpetVariant];

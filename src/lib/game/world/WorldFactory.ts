@@ -4,7 +4,7 @@
 
 import type { WorldState, ChunkState } from '../types/world';
 import { TileType }                    from '../types/world';
-import { WallVariant }                 from '../types/materials';
+import { WallVariant, CarpetVariant }  from '../types/materials';
 import { CHUNK_WIDTH, CHUNK_HEIGHT, TILE_SIZE } from './WorldConstants';
 import { computeChunkVariants, NeighborBit }    from './Autotile';
 import { TILE_AUTOTILE_RULES }                  from './AutotileRules';
@@ -100,10 +100,25 @@ export const SPAWN_POINT = {
 export function createInitialWorld(): WorldState {
   const tiles         = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
   const variantCache  = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
-  const materialTiles = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT); // all DEFAULT (0)
+  const materialTiles = new Uint8Array(CHUNK_WIDTH * CHUNK_HEIGHT);
 
   // Floor — everything walkable by default
   tiles.fill(TileType.CARPET);
+
+  // Assign carpet variant by cell column so all 3 variants are visible:
+  //   col 0 (x  0– 3): SMOOTH    col 2 (x  8–11): STRIPE_H
+  //   col 1 (x  4– 7): STRIPE_V  col 3 (x 12–15): SMOOTH (cycles back)
+  const CARPET_VARIANT_BY_COL = [
+    CarpetVariant.SMOOTH,
+    CarpetVariant.STRIPE_V,
+    CarpetVariant.STRIPE_H,
+    CarpetVariant.SMOOTH,
+  ] as const;
+  for (let y = 0; y < CHUNK_HEIGHT; y++) {
+    for (let x = 0; x < CHUNK_WIDTH; x++) {
+      materialTiles[y * CHUNK_WIDTH + x] = CARPET_VARIANT_BY_COL[Math.floor(x / CELL_SIZE)];
+    }
+  }
 
   // Place one isolated wall station per bitmask value (0–15).
   // Stations 0–7  (rows 0–1) use the DEFAULT material  → stone walls.

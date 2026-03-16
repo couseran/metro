@@ -45,7 +45,14 @@ export const TILE_AUTOTILE_RULES: TilePredicateMap = {
   // Walls connect only to other walls.
   [TileType.WALL]: (neighbor) => neighbor === TileType.WALL,
 
+  // Carpet checks all 8 neighbours for adjacent WALL tiles to determine which
+  // shadow sprites to display.  'independent' mode is required so that a wall
+  // present only at the NW diagonal (no cardinal N or W walls) still sets the
+  // NW bit — blob mode would gate NW on N && W and miss that case.
+  // Only N, W, NW bits are used for the lookup; the rest are masked out by the
+  // tileset's autoTileMask entry (see RoomBuilderTileset).
+  [TileType.CARPET]: { connects: (n) => n === TileType.WALL, corners: 'independent' },
+
   // Add further rules here as new tile types are introduced, e.g.:
-  // [TileType.WATER]:  (n) => n === TileType.WATER || n === TileType.SHALLOW_WATER,
-  // [TileType.CARPET]: (n) => n === TileType.CARPET,
+  // [TileType.WATER]: { connects: (n) => n === TileType.WATER || n === TileType.SHALLOW_WATER, corners: 'blob' },
 };

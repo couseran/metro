@@ -71,6 +71,25 @@ export interface TilesetConfig {
    */
   autoTileMap?: Partial<Record<number, Partial<Record<number, number>>>>;
   /**
+   * Per-tile-type bitmask applied to variantCache before the autoTileMap lookup.
+   *
+   * Lets a tile type declare that only certain neighbour directions affect its
+   * sprite — irrelevant bits are cleared before the key is used, so all
+   * combinations that differ only in those bits collapse to the same lookup
+   * and fall through to the tileMap fallback.
+   *
+   * Particularly useful for tiles that use blob mode (corners: true) but only
+   * need a small subset of the 47 possible bitmask values:
+   *
+   * Example — carpet shadows only care about N, W, NW walls:
+   *   autoTileMask: {
+   *     [TileType.CARPET]: NeighborBit.NORTH | NeighborBit.WEST | NeighborBit.NORTH_WEST
+   *   }
+   *   → a carpet tile with walls to its N and E gets raw bitmask 3 (N|E),
+   *     masked to 1 (N only), and looks up the N-shadow sprite.
+   */
+  autoTileMask?: Partial<Record<number, number>>;
+  /**
    * Material-aware variant sprite map for tile types that support visual variants.
    *
    * Structure: tileType → materialIndex → (bitmask → flat sprite index).
@@ -143,10 +162,13 @@ export interface TileDrawInfo {
  * Returns null when the tile type has no mapping and should not be drawn.
  *
  * Sprite resolution order (first match wins):
- *   1. materialAutoTileMap[tileType][material][variant]  — material + shape variant
- *   2. autoTileMap[tileType][variant]                    — default material, shape variant
- *   3. tileMap[tileType]                                 — static fallback sprite
- *   4. null                                              — no mapping, skip drawing
+ *   1. materialAutoTileMap[tileType][material][maskedVariant]  — material + shape
+ *   2. autoTileMap[tileType][maskedVariant]                    — default material shape
+ *   3. tileMap[tileType]                                       — static fallback sprite
+ *   4. null                                                    — no mapping, skip drawing
+ *
+ * If autoTileMask is defined for this tileType, the variant bitmask is ANDed
+ * with the mask before lookup so irrelevant neighbour directions are ignored.
  *
  * Size overrides (tileOverrides) are keyed by tileType only, since all
  * materials and shape variants of a tile type share the same sprite dimensions.
@@ -162,9 +184,13 @@ export function getTileDrawInfo(
     variant:  number = 0,
     material: number = 0,
 ): TileDrawInfo | null {
+  // Mask irrelevant neighbour bits before lookup (see autoTileMask in TilesetConfig)
+  const mask          = config.autoTileMask?.[tileType];
+  const maskedVariant = mask !== undefined ? variant & mask : variant;
+
   // Prefer the material+variant-specific index, then shape-only, then the static fallback
-  const matAutoIndex = config.materialAutoTileMap?.[tileType]?.[material]?.[variant];
-  const autoIndex    = matAutoIndex ?? config.autoTileMap?.[tileType]?.[variant];
+  const matAutoIndex = config.materialAutoTileMap?.[tileType]?.[material]?.[maskedVariant];
+  const autoIndex    = matAutoIndex ?? config.autoTileMap?.[tileType]?.[maskedVariant];
   const index        = autoIndex ?? config.tileMap[tileType];
   if (index === undefined) return null;
 
