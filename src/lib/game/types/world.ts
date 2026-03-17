@@ -3,10 +3,10 @@
 // ============================================================
 
 // Tile types are integers — fast to compare, cheap to serialize, safe to store in Uint8Array.
-import type {EntityId} from "$lib/game/types/primitives.ts";
-import type {DialogueState, Entity} from "$lib/game/types/entities.ts";
-import type {PropState} from "$lib/game/types/props.ts";
-import type {GameEvent} from "$lib/game/types/events.ts";
+import type { EntityId }              from '$lib/game/types/primitives.ts';
+import type { DialogueState, Entity } from '$lib/game/types/entities.ts';
+import type { PropState, PropLayerSlot } from '$lib/game/types/props.ts';
+import type { GameEvent }             from '$lib/game/types/events.ts';
 
 /**
  * Integer constants for tile surface types.
@@ -72,6 +72,14 @@ export interface ChunkState {
    * Persisted alongside `tiles` (it is authored data, not derived).
    */
   materialTiles: Uint8Array;
+  /**
+   * Props that belong to this chunk, serialized when the chunk unloads.
+   *
+   * On chunk load: these are inserted into GameState.props and re-indexed.
+   * On chunk unload: GameState props with matching chunkKey are written back here.
+   * Empty array for chunks with no props (the common case).
+   */
+  savedProps: PropState[];
 }
 
 /**
@@ -152,14 +160,30 @@ export interface GameState {
   localPlayerId: EntityId;
 
   // --- Props (flat map) ---
+
+  /**
+   * All active props from loaded chunks, keyed by EntityId.
+   * Props are inserted on chunk load and removed on chunk unload.
+   */
   props: Map<EntityId, PropState>;
 
   /**
-   * Spatial index mapping "tx,ty" tile keys to arrays of prop EntityIds at that tile.
-   * Rebuilt each tick or on prop mutation — enables fast collision and interaction queries
-   * without iterating the entire props map.
+   * Per-tile layer occupancy index.
+   * Key: "tx,ty".  Value: PropLayerSlot with one slot per PropLayer.
+   *
+   * Rebuilt on chunk load/unload; updated incrementally on prop placement,
+   * removal, and resize.  Used by PropSystem.canPlaceProp() and the renderer.
    */
-  propSpatialIndex: Map<string, EntityId[]>;
+  propLayerIndex: Map<string, PropLayerSlot>;
+
+  /**
+   * Set of "tx,ty" keys where at least one solid prop cell currently blocks movement.
+   *
+   * Rebuilt/updated alongside propLayerIndex.  Queried by TileCollision.resolveMovement()
+   * and the NPC pathfinder — O(1) per tile.  Automatically updated when a door toggles
+   * state, a plant grows past a solid stage, or any prop is placed/removed.
+   */
+  propSolidIndex: Set<string>;
 
   // --- World ---
   world: WorldState;

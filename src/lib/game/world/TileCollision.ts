@@ -5,6 +5,11 @@
 // Collision is resolved per axis (X then Y) so entities slide along walls
 // rather than stopping dead when they touch a corner.
 // All inputs and outputs are in world-space pixels.
+//
+// Prop collision is integrated through the propSolidIndex parameter —
+// a Set<string> of "tx,ty" keys pre-built by PropSystem.  Passing this set
+// to resolveMovement requires no other changes to the algorithm; the set is
+// queried alongside tile solidity in the same inner loop.
 
 import type { WorldState } from '../types/world';
 import { TileType }        from '../types/world';
@@ -53,7 +58,7 @@ const SOLID_TILES = new Set<number>([
   TileType.WALL,
 ]);
 
-/** Returns true when the tile at the given type value blocks movement. */
+/** Returns true when the tile type value blocks movement. */
 function isTileSolid(tileType: number): boolean {
   return SOLID_TILES.has(tileType);
 }
@@ -84,16 +89,22 @@ export function getTileAt(world: WorldState, worldTX: number, worldTY: number): 
 
 /**
  * Returns true when the AABB defined by (left, top, width, height) overlaps
- * at least one solid tile in the world.
+ * at least one solid tile or solid prop cell.
+ *
  * Uses a small epsilon on the right/bottom edges so exact tile-boundary contact
  * does not count as a collision (allows flush wall-sliding).
+ *
+ * @param propSolidIndex - Optional set of "tx,ty" keys from PropSystem.
+ *                         When provided, prop solid tiles are checked alongside
+ *                         world tile solidity.  Pass null or omit for tile-only checks.
  */
 function overlapsAnySolid(
-    left:   number,
-    top:    number,
-    width:  number,
-    height: number,
-    world:  WorldState,
+    left:           number,
+    top:            number,
+    width:          number,
+    height:         number,
+    world:          WorldState,
+    propSolidIndex: Set<string> | null,
 ): boolean {
   const EDGE_EPS = 0.01; // pixel epsilon — prevents false positives on tile edges
 
@@ -104,7 +115,8 @@ function overlapsAnySolid(
 
   for (let ty = minTY; ty <= maxTY; ty++) {
     for (let tx = minTX; tx <= maxTX; tx++) {
-      if (isTileSolid(getTileAt(world, tx, ty))) return true;
+      if (isTileSolid(getTileAt(world, tx, ty)))           return true;
+      if (propSolidIndex?.has(`${tx},${ty}`))              return true;
     }
   }
   return false;
@@ -114,33 +126,36 @@ function overlapsAnySolid(
 
 /**
  * Advance an entity's position by its velocity over dt milliseconds,
- * resolving tile collisions on each axis independently.
+ * resolving tile and prop collisions on each axis independently.
  *
  * Separate-axis resolution means the entity slides along walls instead of
  * stopping when it touches a corner — a standard technique for grid-based games.
  *
  * Algorithm per axis:
  *   1. Compute the candidate new position after the full velocity step.
- *   2. If the hitbox at the new position overlaps a solid tile, push the
- *      entity back to the nearest tile boundary in the movement direction.
+ *   2. If the hitbox at the new position overlaps a solid tile or prop cell,
+ *      push the entity back to the nearest tile boundary in the movement direction.
  *
- * @param x     - Entity origin X (world pixels)
- * @param y     - Entity origin Y (world pixels)
- * @param vx    - Horizontal velocity (pixels/second)
- * @param vy    - Vertical velocity   (pixels/second)
- * @param hb    - Entity hitbox (offsets and size relative to origin)
- * @param world - Current world state used for tile lookups
- * @param dt    - Fixed timestep in milliseconds
- * @returns       New {x, y} origin — velocity unchanged, position resolved
+ * @param x              - Entity origin X (world pixels)
+ * @param y              - Entity origin Y (world pixels)
+ * @param vx             - Horizontal velocity (pixels/second)
+ * @param vy             - Vertical velocity   (pixels/second)
+ * @param hb             - Entity hitbox (offsets and size relative to origin)
+ * @param world          - Current world state used for tile lookups
+ * @param dt             - Fixed timestep in milliseconds
+ * @param propSolidIndex - Optional pre-built set of solid prop tile keys.
+ *                         Omit (or pass null) when no props have collision.
+ * @returns                New {x, y} origin — velocity unchanged, position resolved
  */
 export function resolveMovement(
-    x:     number,
-    y:     number,
-    vx:    number,
-    vy:    number,
-    hb:    Hitbox,
-    world: WorldState,
-    dt:    number,
+    x:              number,
+    y:              number,
+    vx:             number,
+    vy:             number,
+    hb:             Hitbox,
+    world:          WorldState,
+    dt:             number,
+    propSolidIndex: Set<string> | null = null,
 ): { x: number; y: number } {
   const dtSec = dt / 1000;
 
@@ -153,7 +168,7 @@ export function resolveMovement(
     const hbWidth  = hb.width;
     const hbHeight = hb.height;
 
-    if (overlapsAnySolid(hbLeft, hbTop, hbWidth, hbHeight, world)) {
+    if (overlapsAnySolid(hbLeft, hbTop, hbWidth, hbHeight, world, propSolidIndex)) {
       if (vx > 0) {
         // Hit a wall to the right — push left edge of nearest wall to our right edge
         const wallTX = Math.floor((hbLeft + hbWidth - 0.01) / TILE_SIZE);
@@ -175,7 +190,7 @@ export function resolveMovement(
     const hbWidth  = hb.width;
     const hbHeight = hb.height;
 
-    if (overlapsAnySolid(hbLeft, hbTop, hbWidth, hbHeight, world)) {
+    if (overlapsAnySolid(hbLeft, hbTop, hbWidth, hbHeight, world, propSolidIndex)) {
       if (vy > 0) {
         // Hit a floor tile below — push bottom of hitbox to tile top edge
         const wallTY = Math.floor((hbTop + hbHeight - 0.01) / TILE_SIZE);

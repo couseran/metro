@@ -2,22 +2,31 @@
 //
 // Render Pass 1 — the ground layer.
 //
-// Draws all tiles whose render layer is 'ground': flat surfaces such as
-// carpet, stone, and sand that are always visually beneath every entity
-// and world object.  Because these tiles never overlap entities vertically,
-// no depth sorting is needed — they are rasterised in simple grid order.
+// Two sub-passes are executed in sequence before the Y-sorted world layer:
 //
-// Off-screen tiles are culled per-tile to avoid unnecessary draw calls.
+//   1a. Ground tiles  (drawGroundLayer)
+//       Flat surface tiles (carpet, stone, sand …) that are always visually
+//       beneath every entity and world object.  No depth sorting needed.
+//
+//   1b. Floor props   (drawFloorProps)
+//       Flat prop-layer objects (rugs, doormats, floor decorations) that sit
+//       on top of the tile surface but always beneath entities and object-layer
+//       props.  Drawn in any order because floor props cannot visually overlap
+//       each other (the placement system allows at most one floor prop per tile).
+//
+// Off-screen elements are culled per-tile / per-prop to avoid unnecessary draw calls.
 
 import type { GameState }    from '../../engine/SimulationModule';
 import type { CameraState }  from '../../types/world';
 import type { LoadedAssets } from '../../assets/AssetLoader';
 import { getTileDrawInfo, getTileRenderLayer } from '../tiles/TilesetConfig';
 import { ROOM_BUILDER_TILESET }               from '../tiles/tilesets/RoomBuilderTileset';
+import { getPropSprite }                      from '../props/PropSpriteRegistry';
+import { resolveActiveFrames }                from '../props/PropSpriteConfig';
 import { getViewportTileBounds }              from '../ViewportUtils';
 import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from '../../world/WorldConstants';
 
-// ─── Pass 1 ───────────────────────────────────────────────────────────────────
+// ─── Pass 1a: ground tiles ────────────────────────────────────────────────────
 
 /**
  * Draw all ground-layer tiles visible in the current viewport.
@@ -90,5 +99,102 @@ export function drawGroundLayer(
         ctx.drawImage(img, draw.sx, draw.sy, draw.sw, draw.sh, dstX, dstY, dstW, dstH);
       }
     }
+  }
+}
+
+// ─── Pass 1b: floor props ─────────────────────────────────────────────────────
+
+/**
+ * Draw all floor-layer props visible in the current viewport.
+ *
+ * Floor props (rugs, doormats, flat decorations) are always beneath entities
+ * and object-layer props, so no Y-sorting is needed — they are drawn in any
+ * order, just like ground tiles.
+ *
+ * Viewport culling is based on the prop's tile-aligned bounding box.  A prop
+ * is drawn if any part of its footprint is within the viewport.
+ *
+ * This function handles both single-frame and tiled-repeat sprite layouts.
+ *
+ * @param ctx           - 2D context with viewport transform applied
+ * @param state         - Current game state (props map)
+ * @param camera        - Interpolated camera for this frame (for culling)
+ * @param effectiveScale - config.scale × camera.zoom
+ * @param assets        - Loaded image map
+ * @param canvasWidth   - Canvas width in device pixels
+ * @param canvasHeight  - Canvas height in device pixels
+ */
+export function drawFloorProps(
+    ctx:            CanvasRenderingContext2D,
+    state:          GameState,
+    camera:         CameraState,
+    effectiveScale: number,
+    assets:         LoadedAssets,
+    canvasWidth:    number,
+    canvasHeight:   number,
+): void {
+  if (state.props.size === 0) return;
+
+  const vp = getViewportTileBounds(camera, effectiveScale, canvasWidth, canvasHeight);
+
+  for (const prop of state.props.values()) {
+    if (prop.layer !== 'floor') continue;
+
+    // Viewport cull: prop's footprint bounding box vs visible tile range
+    if (
+      prop.x + prop.width  <= vp.minTX || prop.x >= vp.maxTX ||
+      prop.y + prop.height <= vp.minTY || prop.y >= vp.maxTY
+    ) continue;
+
+    const spriteConfig = getPropSprite(prop.type);
+    if (!spriteConfig) continue;
+
+    // ── Tiled-repeat path ─────────────────────────────────────────────────────
+    if (spriteConfig.tiledRepeat) {
+      const tr  = spriteConfig.tiledRepeat;
+      const img = assets.images.get(tr.src);
+      if (!img) {
+        console.warn(`[GroundLayer] Missing floor prop image: ${tr.src} (type: ${prop.type})`);
+        continue;
+      }
+
+      const dstY = Math.round(prop.y * TILE_SIZE * effectiveScale);
+      const dstW = Math.round(tr.sectionWidth * effectiveScale);
+      const dstH = Math.round(tr.totalHeight  * effectiveScale);
+
+      for (let col = 0; col < prop.width; col++) {
+        const srcX =
+            col === 0                  ? tr.leftSx  :
+            col === prop.width - 1     ? tr.rightSx :
+                                         tr.midSx;
+        const dstX = Math.round((prop.x + col) * TILE_SIZE * effectiveScale);
+        ctx.drawImage(img, srcX, tr.sy, tr.sectionWidth, tr.totalHeight, dstX, dstY, dstW, dstH);
+      }
+      continue;
+    }
+
+    // ── Standard single-frame path ────────────────────────────────────────────
+    const frames = resolveActiveFrames(
+        spriteConfig,
+        prop.rotation,
+        prop.stateId,
+        prop.variant,
+    );
+    const frame = frames[prop.animFrame % frames.length];
+    const img   = assets.images.get(frame.src);
+    if (!img) {
+      console.warn(`[GroundLayer] Missing floor prop image: ${frame.src} (type: ${prop.type})`);
+      continue;
+    }
+
+    const worldX = prop.x * TILE_SIZE - frame.anchorX * frame.sw;
+    const worldY = prop.y * TILE_SIZE - frame.anchorY * frame.sh;
+
+    const dstX = Math.round(worldX     * effectiveScale);
+    const dstY = Math.round(worldY     * effectiveScale);
+    const dstW = Math.round(frame.sw   * effectiveScale);
+    const dstH = Math.round(frame.sh   * effectiveScale);
+
+    ctx.drawImage(img, frame.sx, frame.sy, frame.sw, frame.sh, dstX, dstY, dstW, dstH);
   }
 }

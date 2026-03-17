@@ -3,19 +3,25 @@
 // Public lifecycle wrapper for the rendering system.
 //
 // RendererModule owns the canvas and 2D context, manages resize / DPR scaling,
-// and orchestrates the three-pass render pipeline each frame:
+// and orchestrates the four-pass render pipeline each frame:
 //
-//   Pass 1 — Ground layer  (GroundLayer.ts)
+//   Pass 1a — Ground tiles  (GroundLayer.drawGroundLayer)
 //     Flat floor tiles (carpet, stone …).  No depth sort.  Always beneath all
 //     world objects and entities.
 //
-//   Pass 2 — World layer   (WorldLayer.ts)
-//     Y-sorted world objects: wall tiles, props, and entities (player, NPCs).
-//     Objects with a lower foot-Y are drawn first (visually further back).
-//     This is the pass that makes entities correctly appear behind or in front
-//     of tall sprites such as walls.
+//   Pass 1b — Floor props   (GroundLayer.drawFloorProps)
+//     Flat prop-layer objects (rugs, doormats, floor decorations).  Always
+//     beneath entities and object-layer props.  No depth sort needed because
+//     floor props cannot visually overlap each other (one per tile, per layer).
 //
-//   Pass 3 — Overlay layer (future)
+//   Pass 2  — World layer   (WorldLayer.ts)
+//     Y-sorted world objects: wall tiles, object-layer props, wall-layer props,
+//     and entities (player, NPCs).  Objects with a lower foot-Y are drawn first
+//     (visually further back).  Wall-layer props (paintings, windows) participate
+//     in this sort with a small positive bias so they draw on top of the wall tile
+//     they are mounted on while still sorting correctly with approaching entities.
+//
+//   Pass 3  — Overlay layer (future)
 //     Particles, floating UI, roof tiles with proximity-based transparency, etc.
 //
 // The game loop calls draw() once per display frame; it never mutates state.
@@ -23,7 +29,7 @@
 import type { GameState }   from './SimulationModule';
 import type { LoadedAssets } from '../assets/AssetLoader';
 import { lerpCamera, applyViewportTransform } from '../rendering/ViewportUtils';
-import { drawGroundLayer }                    from '../rendering/layers/GroundLayer';
+import { drawGroundLayer, drawFloorProps }    from '../rendering/layers/GroundLayer';
 import { buildWorldLayer, drawWorldLayer }    from '../rendering/layers/WorldLayer';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -102,12 +108,20 @@ export class RendererModule {
     this.ctx.save();
     applyViewportTransform(this.ctx, canvas, camera, effectiveScale);
 
-    // ── Pass 1: ground ──────────────────────────────────────────────────────
+    // ── Pass 1a: ground tiles ────────────────────────────────────────────────
     // Flat floor tiles — drawn beneath every world object, no sorting needed.
     drawGroundLayer(this.ctx, current, camera, effectiveScale, this.assets, canvas.width, canvas.height);
 
+    // ── Pass 1b: floor props ─────────────────────────────────────────────────
+    // Flat prop-layer objects (rugs, doormats) — drawn on top of ground tiles
+    // but beneath all entities and object-layer props.  No sorting needed.
+    drawFloorProps(this.ctx, current, camera, effectiveScale, this.assets, canvas.width, canvas.height);
+
     // ── Pass 2: world (Y-sorted) ─────────────────────────────────────────────
-    // Walls, props, and entities — collected, sorted by foot-Y, drawn back-to-front.
+    // Wall tiles, object-layer props, wall-layer props, and entities — collected,
+    // sorted by foot-Y, drawn back-to-front.  Wall-layer props use a small
+    // positive sortY bias so they render on their wall face without appearing
+    // as a flat overlay above all entities.
     const worldObjects = buildWorldLayer(
         prev, current, alpha,
         camera, effectiveScale,

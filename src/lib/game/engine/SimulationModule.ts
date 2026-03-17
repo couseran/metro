@@ -2,7 +2,7 @@
 
 import type { InputEvent }                        from './InputModule';
 import type { WorldState, CameraState, TileTypeValue } from '../types/world';
-import type { PropState }                         from '../types/props';
+import type { PropState, PropLayerSlot }          from '../types/props';
 import type { EntityId }                          from '../types/primitives';
 import type { GameEvent }                         from '../types/events';
 import { createInitialWorld, SPAWN_POINT }        from '../world/WorldFactory';
@@ -27,12 +27,28 @@ export interface GameState {
   timestamp:        number;       // accumulated simulation time in ms
 
   world:            WorldState;
+
+  /** All active props from loaded chunks, keyed by EntityId. */
   props:            Map<EntityId, PropState>;
+
   /**
-   * Spatial index: "tx,ty" → array of prop EntityIds at that tile.
-   * Rebuilt when props change — used for fast collision and interaction queries.
+   * Per-tile layer occupancy index.
+   * Key: "tx,ty".  Value: PropLayerSlot with one slot per PropLayer (floor/object/wall).
+   *
+   * Updated incrementally on prop placement, removal, resize, and chunk load/unload.
+   * Used by PropSystem.canPlaceProp() and the renderer (floor prop culling).
    */
-  propSpatialIndex: Map<string, EntityId[]>;
+  propLayerIndex:   Map<string, PropLayerSlot>;
+
+  /**
+   * Set of "tx,ty" keys where at least one solid prop cell currently blocks movement.
+   *
+   * Updated alongside propLayerIndex.  Queried by resolveMovement() and the NPC
+   * pathfinder for O(1) per-tile solid checks.  Automatically updated when a door
+   * toggles, a plant grows past a solid stage, or any prop is placed/removed.
+   */
+  propSolidIndex:   Set<string>;
+
   /**
    * Camera position in world-space pixels — tracks the player.
    * Kept in GameState so it is deterministic, snapshotted for interpolation,
@@ -48,8 +64,9 @@ export interface GameState {
  * Only fields that change every tick need deep cloning:
  *   - player — moves and animates each tick
  *   - camera — follows the player each tick
- * world and props are stable between ticks and do not need interpolation,
- * so the renderer safely shares the same reference from both snapshots.
+ * world, props, and the spatial indexes are stable between ticks and do not
+ * need interpolation, so the renderer safely shares the same reference from
+ * both snapshots.
  */
 function cloneState(state: GameState): GameState {
   return {
@@ -162,7 +179,8 @@ export class SimulationModule {
       timestamp:        0,
       world:            createInitialWorld(),
       props:            new Map(),
-      propSpatialIndex: new Map(),
+      propLayerIndex:   new Map(),
+      propSolidIndex:   new Set(),
       camera:           { x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y, zoom: 1 },
     };
 
@@ -214,7 +232,7 @@ export class SimulationModule {
     let { player } = this.state;
     player = tickPlayer(player, dt);
 
-    // Integrate velocity and resolve tile collisions on each axis independently.
+    // Integrate velocity and resolve tile + prop collisions on each axis independently.
     // Done here (not inside tickPlayer) so collision has access to the full world state.
     const { x, y } = resolveMovement(
         player.x, player.y,
@@ -222,6 +240,7 @@ export class SimulationModule {
         PLAYER_HITBOX,
         this.state.world,
         dt,
+        this.state.propSolidIndex,
     );
     player = { ...player, x, y };
 

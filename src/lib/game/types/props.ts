@@ -1,55 +1,373 @@
+// src/lib/game/types/props.ts
 // ============================================================
-// PROPS (interactive / placeable / destroyable objects)
+// PROPS — placeable, destructible, interactive world objects
 // ============================================================
+//
+// Architecture overview
+// ─────────────────────
+// PropDefinition  Static blueprint for a prop type (collision mask, interaction
+//                 rules, growth stages, etc.).  One entry per type string in the
+//                 PropDefinitionRegistry.  Never mutated at runtime.
+//
+// PropState       One runtime instance of a prop in the world.  References its
+//                 blueprint via PropState.type.  Only stores fields that differ
+//                 between instances or change during gameplay.
+//
+// PropLayerSlot   Per-tile slot record used by propLayerIndex.  At most one prop
+//                 per render layer per tile — enforced at placement time.
+//
+// Layer model
+// ───────────
+//   floor   Flat surface props (carpet, rug, doormat).  Drawn in the ground pass
+//           before entities — never Y-sorted.
+//
+//   object  Standard world objects (furniture, trees, chests, doors).  Y-sorted
+//           with entities in the world pass.  sortY = (originY + height) * TILE_SIZE.
+//
+//   wall    Wall-mounted props (paintings, windows, mounted shelves).  Participate
+//           in the same Y-sort pass as objects and entities.
+//           sortY = (originY + height) * TILE_SIZE + WALL_PROP_SORT_BIAS
+//           This places them just after the wall tile in the sort order (in front
+//           of the wall surface), while still sorting behind entities whose feet
+//           are further south than the wall row.
 
-import type {EntityId} from "$lib/game/types/primitives.ts";
+import type { EntityId } from '$lib/game/types/primitives.ts';
+
+// ─── Layer ────────────────────────────────────────────────────────────────────
 
 /**
- * Category of a world prop.
- * Natural props (tree, rock, bush) are typically destructible.
- * Interactive props (chest, sign, campfire) respond to the E key.
- * Structural props (fence, wall, bridge) are solid and usually indestructible.
- * placed_item covers anything the player has placed from their inventory.
+ * The render layer a prop occupies.
+ * Each tile holds at most one prop per layer (enforced by PropSystem.canPlaceProp).
  */
-export type PropKind =
-    | 'tree' | 'rock' | 'bush'               // natural — usually destructible, may have loot
-    | 'chest' | 'sign' | 'campfire'           // interactive — triggered by player proximity + E
-    | 'fence' | 'wall' | 'bridge'             // structural — solid, not interactive
-    | 'placed_item';                          // player-placed — can always be picked back up
+export type PropLayer = 'floor' | 'object' | 'wall';
 
 /**
- * Runtime state of a single world prop.
- * Props are stored in a flat map (GameState.props) and indexed spatially
- * via GameState.propSpatialIndex for fast collision and interaction lookups.
+ * Small positive bias added to the tile-foot sortY of a wall prop so it draws
+ * on top of its wall tile while remaining in the unified Y-sort pass.
+ *
+ * Value choice: 0.5 px.  This is larger than zero (so wall tiles always render
+ * first), yet much smaller than TILE_SIZE (so normal entity sortY arithmetic is
+ * unaffected).  The renderer never needs to special-case this value — it is an
+ * implementation detail of the sortY formula.
+ */
+export const WALL_PROP_SORT_BIAS = 0.5;
+
+// ─── Interaction type ─────────────────────────────────────────────────────────
+
+/**
+ * How a prop responds when interacted with (E key, tool hit, or proximity).
+ *
+ *  none         — Purely decorative; no interaction.
+ *  destructible — Accepts hit events; drops loot when health reaches 0.
+ *  container    — Opens an inventory UI (chest, barrel, crate).
+ *  door         — Toggles between 'open' and 'closed' states; rebuilds solid index.
+ *  sign         — Shows metadata.text in a dialogue box.
+ *  seat         — Player/NPC can sit; triggers the sit animation on the entity.
+ *  crafting     — Opens a crafting UI (workbench, forge, cooking pot).
+ *  light        — Toggle lit/unlit (campfire, torch, lantern).
+ *  growth       — Plant that advances through growth stages each tick.
+ */
+export type PropInteractionType =
+    | 'none'
+    | 'destructible'
+    | 'container'
+    | 'door'
+    | 'sign'
+    | 'seat'
+    | 'crafting'
+    | 'light'
+    | 'growth';
+
+// ─── Tool kind ────────────────────────────────────────────────────────────────
+
+/**
+ * Tool required to break a destructible prop.
+ * 'hands' = bare-hand breakable (decoration props, one or more hits).
+ */
+export type ToolKind = 'axe' | 'pickaxe' | 'shovel' | 'sword' | 'hands';
+
+// ─── Placement constraints ────────────────────────────────────────────────────
+
+/**
+ * A single rule evaluated when the player attempts to place a prop.
+ * All constraints on a PropDefinition must pass for placement to succeed.
+ */
+export type PlacementConstraint =
+    /** The tile type at each footprint cell must be in this whitelist. */
+    | { type: 'allowed_tile_types';   tileTypes: number[] }
+    /** The tile type at each footprint cell must NOT be in this blacklist. */
+    | { type: 'forbidden_tile_types'; tileTypes: number[] }
+    /** Every footprint cell's floor slot must hold a prop of this type. */
+    | { type: 'requires_floor_prop';  propType: string }
+    /** The target layer slot must be empty for every footprint cell. */
+    | { type: 'layer_must_be_empty';  layer: PropLayer }
+    /** No entity's hitbox may overlap the footprint (for solid props). */
+    | { type: 'no_entity_overlap' };
+
+// ─── Sprite layout ────────────────────────────────────────────────────────────
+
+/**
+ * How the prop's visual is constructed from sprite source data.
+ *
+ *  single       — One sprite covers the entire footprint.  Standard for 1×1 props
+ *                 and small fixed-size multi-tile props.
+ *
+ *  tiled_repeat — Resizable props: [left_cap | middle × (width-2) | right_cap].
+ *                 Each section is one tile wide and defaultHeight tiles tall.
+ *                 Used for horizontally resizable props (carpet, hedge, fence row).
+ */
+export type PropSpriteLayout = 'single' | 'tiled_repeat';
+
+// ─── Growth stages ────────────────────────────────────────────────────────────
+
+/**
+ * One stage in a growing prop's life cycle.
+ * Stages are ordered: index 0 is the starting stage, terminal stages have
+ * ticksToNextStage = null.
+ */
+export interface GrowthStageDefinition {
+    /** State identifier stored in PropState.stateId at this stage. */
+    stageId: string;
+    /** Simulation ticks before advancing to the next stage. null = terminal. */
+    ticksToNextStage: number | null;
+    /** Whether this stage blocks movement. */
+    solid: boolean;
+    /** Whether the player can harvest this stage with the E key. */
+    harvestable: boolean;
+    /** Loot table key for harvesting, or null if harvesting drops nothing. */
+    harvestLootTableId: string | null;
+    /** Sprite variant index to select at this stage (maps to PropSpriteConfig). */
+    spriteVariant: number;
+}
+
+// ─── Prop definition ──────────────────────────────────────────────────────────
+
+/**
+ * Static blueprint for one prop type.
+ * Stored in the PropDefinitionRegistry; never mutated at runtime.
+ * PropState instances reference this via PropState.type.
+ */
+export interface PropDefinition {
+    /** Unique string key, e.g. 'oak_tree', 'chest_wood', 'carpet_red'. */
+    type: string;
+
+    // ── Size & resize ─────────────────────────────────────────────────────────
+
+    /** Default tile width. */
+    defaultWidth: number;
+    /** Default tile height. */
+    defaultHeight: number;
+    /**
+     * Whether the player can extend this prop horizontally after placement.
+     * When true, the prop system tiles inner columns of solidMask.
+     */
+    resizable: boolean;
+    /** Minimum width when resizable (always ≥ defaultWidth). */
+    minWidth: number;
+    /** Maximum width when resizable. null = unlimited. */
+    maxWidth: number | null;
+
+    // ── Layer ─────────────────────────────────────────────────────────────────
+
+    layer: PropLayer;
+
+    // ── Solid mask ────────────────────────────────────────────────────────────
+
+    /**
+     * Per-cell solidity for the default-width footprint.
+     * solidMask[row][col], row ∈ [0, defaultHeight), col ∈ [0, defaultWidth).
+     * true = movement-blocking.
+     *
+     * For resizable props the inner columns (index 1 to defaultWidth-2) are
+     * repeated when width > defaultWidth.  A 2-column definition only has a
+     * left cap (col 0) and a right cap (col 1); the prop system inserts extra
+     * right-cap-shaped columns in between.
+     */
+    solidMask: ReadonlyArray<ReadonlyArray<boolean>>;
+
+    // ── Placement ─────────────────────────────────────────────────────────────
+
+    /** All constraints must pass for the placement to succeed. */
+    placementConstraints: ReadonlyArray<PlacementConstraint>;
+    /** Can the player rotate this prop? */
+    rotatable: boolean;
+    /** How many distinct orientations: 1=none, 2=0°/180°, 4=all 90° steps. */
+    rotationSteps: 1 | 2 | 4;
+
+    // ── Interaction ───────────────────────────────────────────────────────────
+
+    interactionType: PropInteractionType;
+    /** What event fires the interaction handler. null for non-interactive props. */
+    interactionTrigger: 'key_e' | 'proximity' | 'tool_hit' | null;
+    /**
+     * Default stateId for newly placed instances.
+     * e.g. 'closed' for doors, 'unlit' for campfires, 'seedling' for plants.
+     * Empty string for stateless props.
+     */
+    defaultStateId: string;
+
+    // ── Destruction ───────────────────────────────────────────────────────────
+
+    breakable: boolean;
+    /** Maximum HP. null = indestructible. */
+    maxHealth: number | null;
+    /** Tool kind that can break this prop. null = any tool or bare hands. */
+    requiredTool: ToolKind | null;
+    /** Minimum tool tier (0 = any). Future: 1=wood, 2=stone, etc. */
+    minToolTier: number;
+
+    // ── Loot ──────────────────────────────────────────────────────────────────
+
+    /** LootTable key, or null if nothing drops on destruction. */
+    lootTableId: string | null;
+
+    // ── Animation ─────────────────────────────────────────────────────────────
+
+    animated: boolean;
+    /**
+     * 'loop'          — Plays continuously (fire, waterfall, windmill).
+     * 'interaction'   — Plays once on interaction, then stops.
+     * 'state_driven'  — Driven by stateId; sprite and frames come from
+     *                   PropSpriteConfig.stateFrames[stateId].
+     * null            — Static sprite.
+     */
+    animationMode: 'loop' | 'interaction' | 'state_driven' | null;
+    /** Total animation frames for loop/interaction modes. */
+    frameCount: number;
+    /** Milliseconds per animation frame. */
+    frameDuration: number;
+
+    // ── Growth ────────────────────────────────────────────────────────────────
+
+    /**
+     * Ordered growth stage definitions for plant props.
+     * null for non-growing props.
+     * The first entry's stageId must equal defaultStateId.
+     */
+    growthStages: ReadonlyArray<GrowthStageDefinition> | null;
+
+    // ── NPC awareness ─────────────────────────────────────────────────────────
+
+    /** Should NPCs path around the solid tiles of this prop? */
+    npcPathable: boolean;
+    /** Can NPCs interact with this prop (sit, open door, harvest)? */
+    npcCanInteract: boolean;
+    /** Behavior key used by the NPC behavior system (e.g. 'sit', 'open_door'). */
+    npcInteractionBehavior: string | null;
+
+    // ── Sprite ────────────────────────────────────────────────────────────────
+
+    /** Determines which rendering code path the WorldLayer uses. */
+    spriteLayout: PropSpriteLayout;
+}
+
+// ─── Prop state ───────────────────────────────────────────────────────────────
+
+/**
+ * Runtime state of one prop instance in the world.
+ *
+ * All static behaviour is derived by looking up PropState.type in the
+ * PropDefinitionRegistry — only instance-specific or changeable data lives here.
  */
 export interface PropState {
-  /** Stable unique identifier. Matches the key in GameState.props. */
-  id: EntityId;
-  /** Determines rendering, collision behaviour, and interaction type. */
-  kind: PropKind;
-  /** Tile X coordinate (not pixels). */
-  x: number;
-  /** Tile Y coordinate (not pixels). */
-  y: number;
-  /** Whether this prop blocks entity movement. Used by the collision system. */
-  solid: boolean;
-  /** Whether the player can interact with this prop via the E key. */
-  interactive: boolean;
-  /** Remaining hit points, or null if this prop cannot be destroyed. */
-  health: number | null;
-  /** Key into the loot definition table, or null if the prop drops nothing on destruction. */
-  lootTable: string | null;
-  /**
-   * Autotile/visual variant index for this prop instance.
-   *
-   * 0 = default appearance (no autotiling — single-sprite props use this always).
-   * For connecting props (fences, pipes, hedges, roads …) this is the 4-neighbour
-   * bitmask (0–15, see NeighborBit in Autotile.ts) computed at placement time.
-   * Updated incrementally whenever a neighbouring prop of the same kind is added
-   * or removed.  The renderer reads this to select the correct frame set from
-   * PropSpriteConfig.variantFrames.
-   */
-  variant: number;
-  /** Prop-specific runtime data (e.g. chest contents, sign text, campfire fuel level). */
-  metadata: Record<string, unknown>;
+    /** Stable unique identifier.  Key in GameState.props. */
+    id: EntityId;
+    /** Key into the PropDefinitionRegistry.  Determines all static behaviour. */
+    type: string;
+
+    // ── Position ──────────────────────────────────────────────────────────────
+
+    /** Tile X of the top-left origin of the footprint. */
+    x: number;
+    /** Tile Y of the top-left origin of the footprint. */
+    y: number;
+
+    // ── Size ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Actual tile width of this instance.
+     * Equals definition.defaultWidth for non-resizable props.
+     * May be wider for resizable props (carpet, hedge).
+     */
+    width: number;
+    /** Actual tile height (always equals definition.defaultHeight for now). */
+    height: number;
+
+    // ── Layer ─────────────────────────────────────────────────────────────────
+
+    /** Cached from PropDefinition.layer for fast access in rendering/collision. */
+    layer: PropLayer;
+
+    // ── Orientation ───────────────────────────────────────────────────────────
+
+    /**
+     * Quarter-turn rotation: 0=0°, 1=90°CW, 2=180°, 3=270°CW.
+     * When rotation is 1 or 3, the effective footprint transposes width/height.
+     * PropSystem.getEffectiveDimensions() returns the rotated size.
+     */
+    rotation: 0 | 1 | 2 | 3;
+
+    // ── Visual ────────────────────────────────────────────────────────────────
+
+    /**
+     * Autotile bitmask (0–15, 4-neighbour) for connecting props (fences, hedges).
+     * Style variant index for non-connecting props (0 = default).
+     */
+    variant: number;
+
+    // ── Logical state ─────────────────────────────────────────────────────────
+
+    /**
+     * Named state for stateful props.
+     * doors:     'open' | 'closed'
+     * lights:    'lit'  | 'unlit'
+     * plants:    'seedling' | 'sprout' | 'mature' | 'dead'
+     * stateless: '' (empty string)
+     */
+    stateId: string;
+
+    // ── Animation ─────────────────────────────────────────────────────────────
+
+    /** Current frame index within the active animation clip. */
+    animFrame: number;
+    /** Milliseconds accumulated since the last frame advance. */
+    animTimer: number;
+
+    // ── Destruction ───────────────────────────────────────────────────────────
+
+    /** Current HP.  null when the prop is indestructible. */
+    health: number | null;
+
+    // ── Chunk affiliation ─────────────────────────────────────────────────────
+
+    /**
+     * "cx,cy" key of the owning chunk.
+     * Used to route the prop into ChunkState.savedProps when the chunk unloads.
+     */
+    chunkKey: string;
+
+    // ── Per-instance data ─────────────────────────────────────────────────────
+
+    /**
+     * Arbitrary prop-type-specific runtime data.
+     * chest:  { inventory: InventoryState }
+     * sign:   { text: string }
+     * plant:  { growthTimer: number }
+     * door:   {} (state stored in stateId)
+     */
+    metadata: Record<string, unknown>;
+}
+
+// ─── Spatial index slot ───────────────────────────────────────────────────────
+
+/**
+ * Per-tile slot record stored in GameState.propLayerIndex.
+ *
+ * At most one prop may occupy each layer per tile.  null means the slot is
+ * vacant.  The prop system enforces this constraint at placement time.
+ */
+export interface PropLayerSlot {
+    floor:  EntityId | null;
+    object: EntityId | null;
+    wall:   EntityId | null;
 }

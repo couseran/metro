@@ -154,7 +154,7 @@ export function createInitialWorld(): WorldState {
     }
   }
 
-  const chunk: ChunkState = { chunkX: 0, chunkY: 0, tiles, variantCache, materialTiles };
+  const chunk: ChunkState = { chunkX: 0, chunkY: 0, tiles, variantCache, materialTiles, savedProps: [] };
 
   // Assemble the world before computing variants so that getTileAt can resolve
   // cross-chunk border queries (none here, but required by the API contract)

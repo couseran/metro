@@ -13,8 +13,24 @@
 //
 // Sources collected each frame:
 //   1. World-layer tiles  (walls and any future tall tiles)
-//   2. Props              (furniture, trees, interactive objects)
-//   3. Entities           (player; extend for NPCs, remote players)
+//   2. Object-layer props (furniture, trees, chests, doors …)
+//   3. Wall-layer props   (paintings, windows, wall-mounted shelves)
+//   4. Entities           (player; extend for NPCs, remote players)
+//
+// Floor-layer props (carpet, rug) are NOT included here — they are drawn in
+// the ground pass (GroundLayer.drawFloorProps) before this layer runs.
+//
+// Wall-layer props sorting
+// ────────────────────────
+// Wall props participate in the same Y-sort pass as objects and entities.
+// Their sortY is biased by WALL_PROP_SORT_BIAS (a small positive constant)
+// relative to the wall tile they hang on, so:
+//
+//   • They draw on top of their wall tile (sort just after the tile).
+//   • An entity walking north of the wall appears in front of the painting
+//     once their feet are sufficiently south — standard Zelda-style depth.
+//   • An entity pressing against the wall appears behind (correct: the wall
+//     face occludes their upper body).
 //
 // To add a new source of WorldObjects, add a collect* function and include
 // its output in buildWorldLayer().
@@ -27,6 +43,8 @@ import { sortWorldObjects }  from '../WorldObject';
 import { getTileDrawInfo, getTileRenderLayer } from '../tiles/TilesetConfig';
 import { ROOM_BUILDER_TILESET }               from '../tiles/tilesets/RoomBuilderTileset';
 import { getPropSprite }                      from '../props/PropSpriteRegistry';
+import { resolveActiveFrames }                from '../props/PropSpriteConfig';
+import { WALL_PROP_SORT_BIAS }                from '../../types/props';
 import { ADAM_SHEET, ADAM_ANIMATIONS }        from '../sprites/characters/adam';
 import { getSourceRect }                      from '../sprites/SpriteSheet';
 import { PLAYER_HITBOX }                      from '../../world/TileCollision';
@@ -111,12 +129,19 @@ function collectTileObjects(
 // ─── Prop collector ───────────────────────────────────────────────────────────
 
 /**
- * Convert all active props into WorldObjects.
+ * Convert all object-layer and wall-layer props into WorldObjects.
  *
- * The sort key is the bottom edge of the rendered sprite, which correctly
- * represents the prop's "foot" on the ground plane regardless of anchor.
+ * Floor-layer props are excluded here — they belong to the ground pass
+ * (see GroundLayer.drawFloorProps).
  *
- * TODO: advance animated prop frame indices using state.tick and fps.
+ * sortY formula per layer:
+ *   object  → (prop.y + prop.height) * TILE_SIZE
+ *             Foot at the bottom edge of the occupied footprint.
+ *
+ *   wall    → (prop.y + prop.height) * TILE_SIZE + WALL_PROP_SORT_BIAS
+ *             Slightly after the wall tile at the same row, so the painting
+ *             draws on top of the wall surface.  Still sorts correctly with
+ *             entities — those whose feet are south of the wall appear in front.
  */
 function collectPropObjects(
     state:  GameState,
@@ -125,31 +150,74 @@ function collectPropObjects(
   const objects: WorldObject[] = [];
 
   for (const prop of state.props.values()) {
-    const spriteConfig = getPropSprite(prop.kind);
+    // Floor props are drawn in the ground pass — skip here.
+    if (prop.layer === 'floor') continue;
+
+    const spriteConfig = getPropSprite(prop.type);
     if (!spriteConfig) continue;
 
-    // Resolve the frame set for this variant.  Connecting props (fences, pipes …)
-    // store a bitmask in prop.variant; non-connecting props always have variant 0
-    // and fall through to the default frames.
-    const frames = spriteConfig.variantFrames?.[prop.variant] ?? spriteConfig.frames;
-    const frame  = frames[0];
-    const img    = assets.images.get(frame.src);
+    // ── Tiled-repeat path (resizable props: carpet, hedge, etc.) ─────────────
+    if (spriteConfig.tiledRepeat) {
+      const tr  = spriteConfig.tiledRepeat;
+      const img = assets.images.get(tr.src);
+      if (!img) {
+        console.warn(`[WorldLayer] Missing prop image: ${tr.src} (prop type: ${prop.type})`);
+        continue;
+      }
+
+      const sortY = computePropSortY(prop);
+
+      const capturedProp = prop;
+      const capturedTr   = tr;
+
+      objects.push({
+        sortY,
+        draw(ctx, scale) {
+          const dstY = Math.round(capturedProp.y * TILE_SIZE * scale);
+          const sw   = capturedTr.sectionWidth;
+          const sh   = capturedTr.totalHeight;
+          const dstH = Math.round(sh * scale);
+          const dstW = Math.round(sw * scale);
+
+          for (let col = 0; col < capturedProp.width; col++) {
+            const srcX =
+                col === 0                       ? capturedTr.leftSx  :
+                col === capturedProp.width - 1  ? capturedTr.rightSx :
+                                                  capturedTr.midSx;
+            const dstX = Math.round((capturedProp.x + col) * TILE_SIZE * scale);
+            ctx.drawImage(img, srcX, capturedTr.sy, sw, sh, dstX, dstY, dstW, dstH);
+          }
+        },
+      });
+      continue;
+    }
+
+    // ── Standard single-frame path ────────────────────────────────────────────
+    const frames = resolveActiveFrames(
+        spriteConfig,
+        prop.rotation,
+        prop.stateId,
+        prop.variant,
+    );
+    // Advance frame index for animated props (animFrame is managed by PropSystem.tickProps)
+    const frame = frames[prop.animFrame % frames.length];
+    const img   = assets.images.get(frame.src);
     if (!img) {
-      console.warn(`[WorldLayer] Missing prop image: ${frame.src}`);
+      console.warn(`[WorldLayer] Missing prop image: ${frame.src} (prop type: ${prop.type})`);
       continue;
     }
 
     // World-space draw origin (top-left of the sprite), derived from tile coords + anchor
     const worldX = prop.x * TILE_SIZE - frame.anchorX * frame.sw;
     const worldY = prop.y * TILE_SIZE - frame.anchorY * frame.sh;
+    const sortY  = computePropSortY(prop);
 
     const capturedFrame  = frame;
     const capturedWorldX = worldX;
     const capturedWorldY = worldY;
 
     objects.push({
-      // Sort by the bottom edge of the sprite (foot of the prop)
-      sortY: worldY + frame.sh,
+      sortY,
       draw(ctx, scale) {
         const dstX = Math.round(capturedWorldX      * scale);
         const dstY = Math.round(capturedWorldY      * scale);
@@ -161,6 +229,20 @@ function collectPropObjects(
   }
 
   return objects;
+}
+
+/**
+ * Compute the Y-sort key for a prop.
+ *
+ * object layer  → foot at bottom edge of occupied footprint
+ * wall layer    → same foot + WALL_PROP_SORT_BIAS so the prop draws just after
+ *                 the wall tile at the same row (on the wall face), while still
+ *                 sorting behind entities approaching from the south.
+ * floor layer   → not called here (floor props go through the ground pass)
+ */
+function computePropSortY(prop: { y: number; height: number; layer: string }): number {
+  const foot = (prop.y + prop.height) * TILE_SIZE;
+  return prop.layer === 'wall' ? foot + WALL_PROP_SORT_BIAS : foot;
 }
 
 // ─── Entity collector ─────────────────────────────────────────────────────────
@@ -205,7 +287,7 @@ function collectEntityObjects(
     // Sort by the bottom of the player's physical hitbox (their feet),
     // not the bottom of the sprite — this matches the collision system's notion
     // of where the player "stands" and gives correct overlap with wall tiles.
-    // The -4 avoid clipping effect when user is next to a y-long wall
+    // The -4 avoids clipping effect when user is next to a y-long wall
     sortY: renderY + PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height - 4,
     draw(ctx, scale) {
       const dstX = Math.round(renderX * scale);

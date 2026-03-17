@@ -1,56 +1,60 @@
 // src/lib/game/rendering/props/PropSpriteRegistry.ts
 //
-// Maps each PropKind to its visual configuration.
-// Props with no entry here are silently skipped by the renderer.
+// Global registry mapping prop type strings to their visual configurations.
 //
-// HOW TO ADD A PROP:
-//   1. Open the source image in an editor and note the sx/sy/sw/sh of the sprite.
-//   2. Choose anchorX/anchorY:
-//        - Floor-level props (campfire, chest lid-closed): anchorX=0.5, anchorY=1.0
-//        - Tall props (tree, wall): anchorX=0.5, anchorY=1.0 (bottom-center on base tile)
-//   3. Add an entry under the matching PropKind key.
+// HOW TO ADD A PROP SPRITE
+// ─────────────────────────
+//  1. Identify the source rect (sx, sy, sw, sh) by opening the sprite sheet in
+//     an image editor.  The default sheet is Room_Builder_16x16.png.
+//  2. Choose anchor values:
+//       anchorX = 0.5 (centered), anchorY = 1.0 (bottom-aligned to tile)
+//       is the standard for upright object-layer props.
+//       anchorX = 0.0, anchorY = 0.0 is standard for floor-layer props (carpet, rug).
+//  3. Call registerPropSprite(type, config) — typically at the bottom of the file
+//     that defines the matching PropDefinition, so sprite + data live together.
+//
+// The registry uses a Map (not a static Record) so:
+//   • Entries can be added lazily from any module at startup.
+//   • The registry is iterable for editor tools and debug overlays.
+//   • No hard dependency on a central file listing every prop type.
 
 import type { PropSpriteConfig } from './PropSpriteConfig';
-import type { PropKind }         from '../../types/props';
+
+// ─── Registry ─────────────────────────────────────────────────────────────────
+
+const registry = new Map<string, PropSpriteConfig>();
 
 /**
- * Registry of visual configs keyed by PropKind.
- * All source rects refer to Room_Builder_16x16.png unless noted otherwise.
- * TODO: Fill in correct sx/sy values by inspecting the sprite sheet.
+ * Register a visual configuration for a prop type.
+ * Overwrites any existing entry — use this intentionally for hot-reloading.
+ *
+ * @throws {Error} If `type` is an empty string.
  */
-export const PROP_SPRITES: Partial<Record<PropKind, PropSpriteConfig>> = {
-  // ── Natural ──────────────────────────────────────────────────────────────────
-  // tree: {
-  //   frames: [{ src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 0, sy: 0, sw: 16, sh: 32, anchorX: 0.5, anchorY: 1.0 }],
-  // },
-  // rock: {
-  //   frames: [{ src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 0, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1.0 }],
-  // },
-  // bush: {
-  //   frames: [{ src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 0, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1.0 }],
-  // },
-
-  // ── Interactive ──────────────────────────────────────────────────────────────
-  // chest: {
-  //   frames: [{ src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 0, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1.0 }],
-  // },
-  // sign: {
-  //   frames: [{ src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 0, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1.0 }],
-  // },
-  // campfire: {
-  //   frames: [
-  //     { src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 0, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1.0 },
-  //     { src: '/sprites/tilesets/Room_Builder_16x16.png', sx: 16, sy: 0, sw: 16, sh: 16, anchorX: 0.5, anchorY: 1.0 },
-  //   ],
-  //   fps: 6,
-  //   loop: true,
-  // },
-};
+export function registerPropSprite(type: string, config: PropSpriteConfig): void {
+    if (!type) throw new Error('[PropSpriteRegistry] type must be a non-empty string.');
+    registry.set(type, config);
+}
 
 /**
- * Resolve the sprite config for a given prop kind.
- * Returns undefined if the prop has no registered visual — the renderer skips it.
+ * Resolve the visual configuration for a prop type string.
+ * Returns undefined when the type has no registered sprite — the renderer
+ * silently skips props without sprite configs.
  */
-export function getPropSprite(kind: PropKind): PropSpriteConfig | undefined {
-  return PROP_SPRITES[kind];
+export function getPropSprite(type: string): PropSpriteConfig | undefined {
+    return registry.get(type);
+}
+
+/**
+ * Returns true when a sprite config is registered for the given type.
+ */
+export function hasPropSprite(type: string): boolean {
+    return registry.has(type);
+}
+
+/**
+ * Iterate all registered sprite configs.
+ * Intended for editor tooling and debug overlays.
+ */
+export function allPropSprites(): IterableIterator<[string, PropSpriteConfig]> {
+    return registry.entries();
 }

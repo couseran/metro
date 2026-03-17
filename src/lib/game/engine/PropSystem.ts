@@ -1,0 +1,661 @@
+// src/lib/game/engine/PropSystem.ts
+//
+// Pure functions for all prop-related simulation operations.
+//
+// All functions are deterministic: given the same inputs they always return
+// the same outputs and never mutate their arguments.  This keeps the simulation
+// replayable, snapshotable, and easy to unit-test.
+//
+// Responsibilities
+// ────────────────
+//  Footprint      Compute which tile coords a prop occupies (accounting for rotation).
+//  Indexing       Build and incrementally update propLayerIndex / propSolidIndex.
+//  Placement      Validate and execute prop placement; generate EntityIds.
+//  Removal        Remove a prop and clean up its index entries.
+//  Damage         Apply damage and destroy a prop when HP reaches zero.
+//  Interaction    Handle E-key interactions (door toggle, container open, etc.).
+//  Tick           Advance animated and growing props each simulation tick.
+//
+// ID generation
+// ─────────────
+// A module-level counter generates stable EntityIds during one session.  For
+// deterministic multiplayer/replay, replace generatePropId() with a seeded
+// counter passed through GameState.
+
+import type { EntityId, TileCoord }   from '$lib/game/types/primitives.ts';
+import type { PropState, PropLayerSlot, PropDefinition, GrowthStageDefinition } from '$lib/game/types/props.ts';
+import type { ItemStack }              from '$lib/game/types/inventory.ts';
+import { getPropDefinition }           from '$lib/game/data/propDefinitions.ts';
+import { rollLoot }                    from '$lib/game/data/lootTables.ts';
+
+// ─── GameState shape ──────────────────────────────────────────────────────────
+// Import the runtime GameState from SimulationModule (the sole source of truth
+// at runtime).  Importing just what we need avoids circular deps.
+
+import type { GameState } from '$lib/game/engine/SimulationModule.ts';
+
+// ─── ID generation ────────────────────────────────────────────────────────────
+
+let _nextPropId = 1;
+
+/** Reset the counter — for unit tests only. */
+export function _resetPropIdCounter(): void { _nextPropId = 1; }
+
+function generatePropId(): EntityId {
+    return `prop_${_nextPropId++}`;
+}
+
+// ─── Footprint helpers ────────────────────────────────────────────────────────
+
+/**
+ * Return the effective (width, height) of a prop accounting for rotation.
+ * Rotation 1 (90°CW) and 3 (270°CW) swap width and height.
+ */
+export function getEffectiveDimensions(
+    width:    number,
+    height:   number,
+    rotation: 0 | 1 | 2 | 3,
+): { w: number; h: number } {
+    return (rotation === 1 || rotation === 3)
+        ? { w: height, h: width }
+        : { w: width,  h: height };
+}
+
+/**
+ * Return all tile coordinates occupied by a prop instance.
+ *
+ * The footprint is a rectangle from (prop.x, prop.y) with effective dimensions
+ * derived from prop.width, prop.height, and prop.rotation.
+ */
+export function getPropFootprint(prop: PropState): TileCoord[] {
+    const { w, h } = getEffectiveDimensions(prop.width, prop.height, prop.rotation);
+    const tiles: TileCoord[] = [];
+    for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) {
+            tiles.push({ x: prop.x + dx, y: prop.y + dy });
+        }
+    }
+    return tiles;
+}
+
+/**
+ * Return true when the tile at world-tile coordinate (tx, ty) is solid for
+ * the given prop instance, accounting for rotation and the definition's solidMask.
+ *
+ * Returns false for any tile outside the prop's footprint.
+ */
+export function isPropSolidAt(
+    prop: PropState,
+    def:  PropDefinition,
+    tx:   number,
+    ty:   number,
+): boolean {
+    const { w, h } = getEffectiveDimensions(prop.width, prop.height, prop.rotation);
+    const localX = tx - prop.x;
+    const localY = ty - prop.y;
+
+    if (localX < 0 || localX >= w || localY < 0 || localY >= h) return false;
+
+    // Map the local (rotated) coordinate back to the definition mask coordinate.
+    const [maskRow, maskCol] = rotatedToMask(localX, localY, prop.rotation, def.defaultWidth, def.defaultHeight);
+    return getSolidMaskAt(def, maskRow, maskCol, prop.width);
+}
+
+/**
+ * Convert a rotated local (x, y) inside the footprint back to a (row, col)
+ * index into the definition's solidMask.
+ *
+ * Rotation 0 (0°):   (lx, ly) → mask[ly][lx]
+ * Rotation 1 (90°CW): prop width ← def height, prop height ← def width
+ *                     (lx, ly) → mask[lx][defH - 1 - ly]  ... wait this needs careful thinking
+ *
+ * Standard 2D rotation conventions (90°CW = transpose + reverse rows):
+ *   rot0:  mask[ly][lx]
+ *   rot1:  mask[defH-1-lx][ly]   (90° CW)
+ *   rot2:  mask[defH-1-ly][defW-1-lx] (180°)
+ *   rot3:  mask[lx][defW-1-ly]   (270° CW / 90° CCW)
+ */
+function rotatedToMask(
+    lx: number, ly: number,
+    rotation: 0 | 1 | 2 | 3,
+    defW: number, defH: number,
+): [row: number, col: number] {
+    switch (rotation) {
+        case 0: return [ly,          lx];
+        case 1: return [defH - 1 - lx, ly];
+        case 2: return [defH - 1 - ly, defW - 1 - lx];
+        case 3: return [lx,          defW - 1 - ly];
+    }
+}
+
+/**
+ * Look up one cell in a prop definition's solidMask, handling the tiling logic
+ * for resizable props.
+ *
+ * For resizable props (defaultWidth = 2, meaning left cap + right cap):
+ *   col 0              → left cap (mask col 0)
+ *   col 1…width-2      → middle (mask col 1, if present; otherwise false)
+ *   col width-1        → right cap (mask col defaultWidth-1)
+ */
+function getSolidMaskAt(def: PropDefinition, row: number, col: number, instanceWidth: number): boolean {
+    if (!def.resizable || instanceWidth <= def.defaultWidth) {
+        // Non-resizable or default size: direct lookup
+        return def.solidMask[row]?.[col] ?? false;
+    }
+
+    const dw = def.defaultWidth;
+    const lastDefCol = dw - 1;
+
+    if (col === 0)                         return def.solidMask[row]?.[0]         ?? false;
+    if (col === instanceWidth - 1)         return def.solidMask[row]?.[lastDefCol] ?? false;
+    // Middle columns: use the second definition column if it exists (inner column)
+    const midMaskCol = Math.min(1, lastDefCol - 1);
+    return def.solidMask[row]?.[midMaskCol] ?? false;
+}
+
+// ─── Index builders ───────────────────────────────────────────────────────────
+
+/**
+ * Build a fresh propLayerIndex from the full props map.
+ * O(n × footprint_size) — call only on chunk load/unload, not per tick.
+ */
+export function buildPropLayerIndex(props: Map<EntityId, PropState>): Map<string, PropLayerSlot> {
+    const index = new Map<string, PropLayerSlot>();
+    for (const prop of props.values()) {
+        _indexPropIntoLayerIndex(prop, index);
+    }
+    return index;
+}
+
+/**
+ * Build a fresh propSolidIndex from the full props map.
+ * O(n × footprint_size) — call only on chunk load/unload, not per tick.
+ */
+export function buildPropSolidIndex(props: Map<EntityId, PropState>): Set<string> {
+    const solid = new Set<string>();
+    for (const prop of props.values()) {
+        _indexPropIntoSolidIndex(prop, solid);
+    }
+    return solid;
+}
+
+/**
+ * Add one prop's footprint tiles to an existing layerIndex and solidIndex.
+ * Used for incremental updates after placement or chunk load.
+ */
+export function indexProp(
+    prop:       PropState,
+    layerIndex: Map<string, PropLayerSlot>,
+    solidIndex: Set<string>,
+): void {
+    _indexPropIntoLayerIndex(prop, layerIndex);
+    _indexPropIntoSolidIndex(prop, solidIndex);
+}
+
+/**
+ * Remove one prop's footprint tiles from an existing layerIndex and solidIndex.
+ * Used for incremental updates after removal or chunk unload.
+ */
+export function deindexProp(
+    prop:       PropState,
+    layerIndex: Map<string, PropLayerSlot>,
+    solidIndex: Set<string>,
+): void {
+    const def = getPropDefinition(prop.type);
+    const footprint = getPropFootprint(prop);
+
+    for (const tile of footprint) {
+        const key  = `${tile.x},${tile.y}`;
+        const slot = layerIndex.get(key);
+        if (slot) {
+            const emptySlot: PropLayerSlot = { ...slot, [prop.layer]: null };
+            if (!emptySlot.floor && !emptySlot.object && !emptySlot.wall) {
+                layerIndex.delete(key);
+            } else {
+                layerIndex.set(key, emptySlot);
+            }
+        }
+        // Only clear solid if this specific prop made it solid at this tile
+        if (def && isPropSolidAt(prop, def, tile.x, tile.y)) {
+            solidIndex.delete(key);
+        }
+    }
+}
+
+// ─── Internal index helpers ───────────────────────────────────────────────────
+
+function _indexPropIntoLayerIndex(prop: PropState, index: Map<string, PropLayerSlot>): void {
+    for (const tile of getPropFootprint(prop)) {
+        const key      = `${tile.x},${tile.y}`;
+        const existing = index.get(key) ?? { floor: null, object: null, wall: null };
+        index.set(key, { ...existing, [prop.layer]: prop.id });
+    }
+}
+
+function _indexPropIntoSolidIndex(prop: PropState, solid: Set<string>): void {
+    const def = getPropDefinition(prop.type);
+    if (!def) return;
+
+    // Door in 'open' state is not solid regardless of solidMask
+    const isDoorOpen = def.interactionType === 'door' && prop.stateId === 'open';
+    if (isDoorOpen) return;
+
+    for (const tile of getPropFootprint(prop)) {
+        if (isPropSolidAt(prop, def, tile.x, tile.y)) {
+            solid.add(`${tile.x},${tile.y}`);
+        }
+    }
+}
+
+// ─── Placement ────────────────────────────────────────────────────────────────
+
+export type PlacementValidation =
+    | { ok: true }
+    | { ok: false; reason: string };
+
+/**
+ * Validate whether a prop can be placed at the given position.
+ * Returns { ok: true } on success, or { ok: false, reason } on failure.
+ *
+ * Does NOT mutate state.
+ */
+export function canPlaceProp(
+    state:    GameState,
+    def:      PropDefinition,
+    x:        number,
+    y:        number,
+    rotation: 0 | 1 | 2 | 3,
+    width:    number,
+): PlacementValidation {
+    if (def.resizable) {
+        if (width < def.minWidth)  return { ok: false, reason: `Width ${width} is below minimum ${def.minWidth}.` };
+        if (def.maxWidth !== null && width > def.maxWidth)
+            return { ok: false, reason: `Width ${width} exceeds maximum ${def.maxWidth}.` };
+    }
+
+    const { w, h } = getEffectiveDimensions(width, def.defaultHeight, rotation);
+
+    for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) {
+            const tx  = x + dx;
+            const ty  = y + dy;
+            const key = `${tx},${ty}`;
+
+            // ── Chunk loaded check ─────────────────────────────────────────
+            const chunkX = Math.floor(tx / 16); // CHUNK_WIDTH
+            const chunkY = Math.floor(ty / 16); // CHUNK_HEIGHT
+            const chunkKey = `${chunkX},${chunkY}`;
+            if (!state.world.activeChunks.has(chunkKey)) {
+                return { ok: false, reason: `Tile (${tx},${ty}) is in an unloaded chunk.` };
+            }
+
+            const chunk = state.world.chunks.get(chunkKey);
+            const localX   = tx - chunkX * 16;
+            const localY   = ty - chunkY * 16;
+            const tileType = chunk ? chunk.tiles[localY * 16 + localX] : 0;
+
+            // ── Placement constraints ──────────────────────────────────────
+            for (const constraint of def.placementConstraints) {
+                switch (constraint.type) {
+                    case 'allowed_tile_types':
+                        if (!constraint.tileTypes.includes(tileType)) {
+                            return { ok: false, reason: `Tile type ${tileType} at (${tx},${ty}) is not allowed.` };
+                        }
+                        break;
+
+                    case 'forbidden_tile_types':
+                        if (constraint.tileTypes.includes(tileType)) {
+                            return { ok: false, reason: `Tile type ${tileType} at (${tx},${ty}) is forbidden.` };
+                        }
+                        break;
+
+                    case 'layer_must_be_empty': {
+                        const slot = state.propLayerIndex.get(key);
+                        if (slot && slot[constraint.layer] !== null) {
+                            return { ok: false, reason: `Layer '${constraint.layer}' at (${tx},${ty}) is occupied.` };
+                        }
+                        break;
+                    }
+
+                    case 'requires_floor_prop': {
+                        const slot = state.propLayerIndex.get(key);
+                        const floorPropId = slot?.floor ?? null;
+                        if (!floorPropId) {
+                            return { ok: false, reason: `No floor prop at (${tx},${ty}).` };
+                        }
+                        const floorProp = state.props.get(floorPropId);
+                        if (floorProp?.type !== constraint.propType) {
+                            return { ok: false, reason: `Floor prop at (${tx},${ty}) is not '${constraint.propType}'.` };
+                        }
+                        break;
+                    }
+
+                    case 'no_entity_overlap':
+                        // Entity overlap check: deferred to caller (requires entity positions)
+                        // PropSystem exposes isPropSolidAt() for callers to perform hitbox tests
+                        break;
+                }
+            }
+        }
+    }
+
+    return { ok: true };
+}
+
+/**
+ * Place a prop in the world, updating props, propLayerIndex, and propSolidIndex.
+ *
+ * The caller must have already validated placement with canPlaceProp().
+ * Returns the updated GameState and the new prop's EntityId.
+ */
+export function placeProp(
+    state:    GameState,
+    def:      PropDefinition,
+    x:        number,
+    y:        number,
+    rotation: 0 | 1 | 2 | 3,
+    width:    number = def.defaultWidth,
+): { state: GameState; propId: EntityId } {
+    const propId = generatePropId();
+
+    // Determine which chunk owns this prop (use the origin tile)
+    const chunkX   = Math.floor(x / 16);
+    const chunkY   = Math.floor(y / 16);
+    const chunkKey = `${chunkX},${chunkY}`;
+
+    const prop: PropState = {
+        id:        propId,
+        type:      def.type,
+        x, y,
+        width,
+        height:    def.defaultHeight,
+        layer:     def.layer,
+        rotation,
+        variant:   0,
+        stateId:   def.defaultStateId,
+        animFrame: 0,
+        animTimer: 0,
+        health:    def.maxHealth,
+        chunkKey,
+        metadata:  {},
+    };
+
+    const newProps      = new Map(state.props);
+    const newLayerIndex = new Map(state.propLayerIndex);
+    const newSolidIndex = new Set(state.propSolidIndex);
+
+    newProps.set(propId, prop);
+    indexProp(prop, newLayerIndex, newSolidIndex);
+
+    const newState: GameState = {
+        ...state,
+        props:          newProps,
+        propLayerIndex: newLayerIndex,
+        propSolidIndex: newSolidIndex,
+    };
+
+    return { state: newState, propId };
+}
+
+// ─── Removal ──────────────────────────────────────────────────────────────────
+
+/**
+ * Remove a prop from the world, cleaning up its index entries.
+ * No loot is dropped — call damageProp() for destruction with loot.
+ */
+export function removeProp(state: GameState, propId: EntityId): GameState {
+    const prop = state.props.get(propId);
+    if (!prop) return state;
+
+    const newProps      = new Map(state.props);
+    const newLayerIndex = new Map(state.propLayerIndex);
+    const newSolidIndex = new Set(state.propSolidIndex);
+
+    newProps.delete(propId);
+    deindexProp(prop, newLayerIndex, newSolidIndex);
+
+    return { ...state, props: newProps, propLayerIndex: newLayerIndex, propSolidIndex: newSolidIndex };
+}
+
+// ─── Damage ───────────────────────────────────────────────────────────────────
+
+export interface DamageResult {
+    state:      GameState;
+    destroyed:  boolean;
+    loot:       ItemStack[];
+}
+
+/**
+ * Apply `amount` damage to a prop.  If HP reaches 0 the prop is destroyed
+ * and loot is rolled.  The caller must push the appropriate GameEvents
+ * (PROP_DAMAGED or PROP_DESTROYED) from the returned result.
+ *
+ * @param toolUsed - Tool kind used for the hit (affects loot table filtering).
+ * @param toolTier - Tier of the tool.
+ * @param rng      - Seeded PRNG for loot rolling.
+ */
+export function damageProp(
+    state:    GameState,
+    propId:   EntityId,
+    amount:   number,
+    toolUsed: import('$lib/game/types/props.ts').ToolKind,
+    toolTier: number,
+    rng:      import('$lib/game/data/lootTables.ts').RngFn,
+): DamageResult {
+    const prop = state.props.get(propId);
+    if (!prop || prop.health === null) return { state, destroyed: false, loot: [] };
+
+    const def = getPropDefinition(prop.type);
+    if (!def?.breakable)               return { state, destroyed: false, loot: [] };
+
+    const newHealth = Math.max(0, prop.health - amount);
+
+    if (newHealth === 0) {
+        // Destroyed — roll loot and remove
+        const loot   = def.lootTableId ? rollLoot(def.lootTableId, toolUsed, toolTier, rng) : [];
+        const newState = removeProp(state, propId);
+        return { state: newState, destroyed: true, loot };
+    }
+
+    // Still alive — update HP
+    const updatedProp: PropState = { ...prop, health: newHealth };
+    const newProps = new Map(state.props);
+    newProps.set(propId, updatedProp);
+    return { state: { ...state, props: newProps }, destroyed: false, loot: [] };
+}
+
+// ─── Interaction ──────────────────────────────────────────────────────────────
+
+export interface InteractionResult {
+    state:  GameState;
+    /** Event type the caller should emit, or null if no event is needed. */
+    event:  'PROP_STATE_CHANGED' | 'PROP_CONTAINER_OPENED' | null;
+    from?:  string;
+    to?:    string;
+}
+
+/**
+ * Handle an E-key interaction between `playerId` and prop `propId`.
+ *
+ * Only props with interactionTrigger 'key_e' are processed here.
+ * Returns the (possibly unchanged) GameState and an event descriptor for the
+ * caller to push into the event queue.
+ */
+export function interactWithProp(
+    state:    GameState,
+    propId:   EntityId,
+    playerId: EntityId,
+): InteractionResult {
+    const prop = state.props.get(propId);
+    if (!prop) return { state, event: null };
+
+    const def = getPropDefinition(prop.type);
+    if (!def || def.interactionTrigger !== 'key_e') return { state, event: null };
+
+    switch (def.interactionType) {
+        case 'door':
+            return _toggleDoor(state, prop, def);
+        case 'container':
+            return { state, event: 'PROP_CONTAINER_OPENED' };
+        case 'light':
+            return _toggleLight(state, prop);
+        default:
+            return { state, event: null };
+    }
+}
+
+function _toggleDoor(state: GameState, prop: PropState, def: PropDefinition): InteractionResult {
+    const from  = prop.stateId;
+    const to    = from === 'open' ? 'closed' : 'open';
+
+    const updatedProp: PropState = { ...prop, stateId: to };
+    const newProps = new Map(state.props);
+    newProps.set(prop.id, updatedProp);
+
+    // Rebuild solid index for the affected prop
+    const newSolidIndex = new Set(state.propSolidIndex);
+    const footprint = getPropFootprint(prop);
+
+    if (to === 'open') {
+        // Door opened — remove solid entries
+        for (const tile of footprint) {
+            newSolidIndex.delete(`${tile.x},${tile.y}`);
+        }
+    } else {
+        // Door closed — add solid entries
+        for (const tile of footprint) {
+            if (isPropSolidAt(updatedProp, def, tile.x, tile.y)) {
+                newSolidIndex.add(`${tile.x},${tile.y}`);
+            }
+        }
+    }
+
+    return {
+        state: { ...state, props: newProps, propSolidIndex: newSolidIndex },
+        event: 'PROP_STATE_CHANGED',
+        from,
+        to,
+    };
+}
+
+function _toggleLight(state: GameState, prop: PropState): InteractionResult {
+    const from = prop.stateId;
+    const to   = from === 'lit' ? 'unlit' : 'lit';
+
+    const updatedProp: PropState = { ...prop, stateId: to };
+    const newProps = new Map(state.props);
+    newProps.set(prop.id, updatedProp);
+    return { state: { ...state, props: newProps }, event: 'PROP_STATE_CHANGED', from, to };
+}
+
+// ─── Resize ───────────────────────────────────────────────────────────────────
+
+/**
+ * Resize a resizable prop to a new width.
+ *
+ * The new footprint columns are added on the right (positive X direction).
+ * The caller must validate that the new tiles are clear before calling this.
+ */
+export function resizeProp(
+    state:    GameState,
+    propId:   EntityId,
+    newWidth: number,
+): GameState {
+    const prop = state.props.get(propId);
+    if (!prop) return state;
+
+    const def = getPropDefinition(prop.type);
+    if (!def?.resizable) return state;
+
+    // De-index old footprint, re-index new footprint
+    const newLayerIndex = new Map(state.propLayerIndex);
+    const newSolidIndex = new Set(state.propSolidIndex);
+    deindexProp(prop, newLayerIndex, newSolidIndex);
+
+    const resized: PropState = { ...prop, width: newWidth };
+    const newProps = new Map(state.props);
+    newProps.set(propId, resized);
+    indexProp(resized, newLayerIndex, newSolidIndex);
+
+    return { ...state, props: newProps, propLayerIndex: newLayerIndex, propSolidIndex: newSolidIndex };
+}
+
+// ─── Tick ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Advance all props that require per-tick simulation:
+ *   • Animated props (loop/interaction modes): advance animFrame and animTimer.
+ *   • Growing props: advance growthTimer and promote to next growth stage.
+ *
+ * Only props in active chunks are ticked (checked via prop.chunkKey).
+ * Returns the updated GameState.  Emits no events — callers must watch the
+ * returned state for stage transitions if they need events.
+ */
+export function tickProps(state: GameState, dt: number): GameState {
+    let changed = false;
+    const newProps = new Map(state.props);
+    let newSolidIndex: Set<string> | null = null;
+
+    for (const [id, prop] of state.props) {
+        if (!state.world.activeChunks.has(prop.chunkKey)) continue;
+
+        const def = getPropDefinition(prop.type);
+        if (!def) continue;
+
+        let updated = prop;
+
+        // ── Animation tick ───────────────────────────────────────────────────
+        if (def.animated && def.animationMode === 'loop' && def.frameCount > 1) {
+            const newTimer = prop.animTimer + dt;
+            if (newTimer >= def.frameDuration) {
+                const newFrame = (prop.animFrame + Math.floor(newTimer / def.frameDuration)) % def.frameCount;
+                updated = { ...updated, animFrame: newFrame, animTimer: newTimer % def.frameDuration };
+            } else {
+                updated = { ...updated, animTimer: newTimer };
+            }
+        }
+
+        // ── Growth tick ──────────────────────────────────────────────────────
+        if (def.growthStages && def.growthStages.length > 0) {
+            const currentStageIdx = def.growthStages.findIndex(s => s.stageId === prop.stateId);
+            const currentStage    = def.growthStages[currentStageIdx] as GrowthStageDefinition | undefined;
+
+            if (currentStage && currentStage.ticksToNextStage !== null) {
+                const growthTimer  = ((prop.metadata.growthTimer as number | undefined) ?? 0) + 1;
+                if (growthTimer >= currentStage.ticksToNextStage) {
+                    const nextStage = def.growthStages[currentStageIdx + 1];
+                    if (nextStage) {
+                        // Advance to next stage
+                        updated = {
+                            ...updated,
+                            stateId:  nextStage.stageId,
+                            variant:  nextStage.spriteVariant,
+                            metadata: { ...updated.metadata, growthTimer: 0 },
+                        };
+                        // Rebuild solid index if solidity changed
+                        if (currentStage.solid !== nextStage.solid) {
+                            if (!newSolidIndex) newSolidIndex = new Set(state.propSolidIndex);
+                            const key = `${prop.x},${prop.y}`;
+                            if (nextStage.solid) newSolidIndex.add(key);
+                            else                 newSolidIndex.delete(key);
+                        }
+                    }
+                } else {
+                    updated = { ...updated, metadata: { ...updated.metadata, growthTimer } };
+                }
+            }
+        }
+
+        if (updated !== prop) {
+            newProps.set(id, updated);
+            changed = true;
+        }
+    }
+
+    if (!changed) return state;
+    return {
+        ...state,
+        props:          newProps,
+        propSolidIndex: newSolidIndex ?? state.propSolidIndex,
+    };
+}
