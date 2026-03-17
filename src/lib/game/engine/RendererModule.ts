@@ -42,6 +42,7 @@ export class RendererModule {
   private ctx:    CanvasRenderingContext2D;
   private config: RendererConfig;
   private assets: LoadedAssets | null = null;
+  private dpr:    number = 1;
 
   constructor(config: RendererConfig) {
     this.config = config;
@@ -67,9 +68,9 @@ export class RendererModule {
    * device pixel ratio.  Called on mount and whenever the window is resized.
    */
   resize(width: number, height: number): void {
-    const dpr = window.devicePixelRatio ?? 1;
-    this.config.canvas.width  = width  * dpr;
-    this.config.canvas.height = height * dpr;
+    this.dpr = window.devicePixelRatio ?? 1;
+    this.config.canvas.width  = width  * this.dpr;
+    this.config.canvas.height = height * this.dpr;
     this.ctx.imageSmoothingEnabled = false;
   }
 
@@ -93,7 +94,7 @@ export class RendererModule {
     this.clear();
 
     const camera         = lerpCamera(prev.camera, current.camera, alpha);
-    const effectiveScale = this.config.scale * camera.zoom;
+    const effectiveScale = this.config.scale * camera.zoom * this.dpr;
     const { canvas }     = this.config;
 
     // Apply the shared viewport transform once — all layers draw in world-space
