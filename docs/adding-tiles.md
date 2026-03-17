@@ -146,3 +146,9 @@ Then create a new tileset config file alongside `RoomBuilderTileset.ts` and regi
 ## Footstep audio
 
 See [adding-audio.md](./adding-audio.md) — footstep sounds are mapped from TileType in `AudioModule.ts`.
+
+## Wall-mounted objects
+
+Paintings, windows, shelves, and similar objects that hang on a wall face are **props**, not tiles. They are registered as `layer: 'wall'` props and participate in the Y-sorted world pass with a small sort bias so they appear on the wall face while still being correctly occluded by entities approaching from the south.
+
+See [adding-props.md](./adding-props.md) for the full prop registration workflow.

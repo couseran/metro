@@ -108,6 +108,38 @@ const FOOTSTEP_SURFACE: Partial<Record<number, string>> = {
 
 Tile types without an entry play no footstep sound.
 
+## Prop sounds
+
+The simulation emits four prop-related events that `AudioModule.handleEvents()` can translate into audio. They are currently declared but silent — wire them up as artwork and SFX are finalised.
+
+**`src/lib/game/audio/AudioModule.ts`**
+
+```ts
+case 'PROP_DESTROYED': {
+  // Play a break sound based on prop type or tool used
+  // e.g. this.sfx.play('break.wood');
+  break;
+}
+
+case 'PROP_DAMAGED': {
+  // Play a hit sound (optional — can be noisy for multi-hit props)
+  break;
+}
+
+case 'PROP_STATE_CHANGED': {
+  // Play a door creak, chest click, etc. keyed on event.to (new stateId)
+  // e.g. if (event.to === 'open') this.sfx.play('door.open');
+  break;
+}
+
+case 'PROP_CONTAINER_OPENED': {
+  // Play a chest-open sound
+  break;
+}
+```
+
+Add the corresponding SFX pools to `audioManifest.ts` following the SFX registration steps above. Suggested naming convention: `break.<material>`, `door.<verb>`, `chest.<verb>`.
+
 ## Volume and gain
 
 The gain hierarchy is:
