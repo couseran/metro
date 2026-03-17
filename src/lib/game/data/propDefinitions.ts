@@ -6,7 +6,7 @@
 // ──────────────────────────
 //  1. Define a PropDefinition object (see interface in types/props.ts).
 //  2. Call registerPropDefinition(def) — typically at module load time in a
-//     dedicated file (e.g. data/props/furniture.ts) that is imported by the
+//     dedicated file (e.g. data/props/PropDefinitionRegistration.ts) that is imported by the
 //     game's entry point.
 //  3. Register the matching sprite config in rendering/props/PropSpriteRegistry.ts
 //     via registerPropSprite(def.type, config).
@@ -17,6 +17,7 @@
 //   • Definitions can be loaded lazily or from external data files.
 //   • The registry can be inspected/iterated at runtime (editor tools, debug UI).
 //   • Adding a new prop never requires modifying this file.
+import './props/furnitures/chair/PropDefinitionRegistration.ts'
 
 import type { PropDefinition } from '$lib/game/types/props.ts';
 
@@ -68,7 +69,7 @@ export function allPropDefinitions(): IterableIterator<PropDefinition> {
 //
 // To keep this file short, prop definitions are grouped into dedicated modules:
 //
-//   data/props/furniture.ts  — chairs, tables, beds, bookshelves
+//   data/props/PropDefinitionRegistration.ts  — chairs, tables, beds, bookshelves
 //   data/props/nature.ts     — trees, rocks, bushes, plants
 //   data/props/structures.ts — doors, fences, walls, bridges
 //   data/props/containers.ts — chests, barrels, crates

@@ -37,7 +37,7 @@ Both are rebuilt from scratch by `buildPropLayerIndex` / `buildPropSolidIndex` i
 
 Prop definitions live in `src/lib/game/data/props/`. Create a file per category (furniture, nature, structures…) and import it from `data/propDefinitions.ts`.
 
-**`src/lib/game/data/props/furniture.ts`** (example)
+**`src/lib/game/data/props/PropDefinitionRegistration.ts`** (example)
 
 ```ts
 import { registerPropDefinition } from '../propDefinitions';

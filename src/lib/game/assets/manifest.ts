@@ -10,6 +10,7 @@ export const MANIFEST: AssetManifest = {
   images: [
     '/sprites/characters/Adam_16x16.png',
     '/sprites/tilesets/Room_Builder_16x16.png',
+    '/sprites/props/Interiors_16x16.png',
     // '/sprites/characters/Npc_01.png',
   ],
 };
