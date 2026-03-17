@@ -1,11 +1,13 @@
 // src/lib/game/engine/SimulationModule.ts
 
-import type { InputEvent }   from './InputModule';
-import type { WorldState, CameraState } from '../types/world';
-import type { PropState }    from '../types/props';
-import type { EntityId }     from '../types/primitives';
-import { createInitialWorld, SPAWN_POINT }    from '../world/WorldFactory';
-import { resolveMovement, PLAYER_HITBOX }    from '../world/TileCollision';
+import type { InputEvent }                        from './InputModule';
+import type { WorldState, CameraState, TileTypeValue } from '../types/world';
+import type { PropState }                         from '../types/props';
+import type { EntityId }                          from '../types/primitives';
+import type { GameEvent }                         from '../types/events';
+import { createInitialWorld, SPAWN_POINT }        from '../world/WorldFactory';
+import { resolveMovement, PLAYER_HITBOX, getTileAt } from '../world/TileCollision';
+import { TILE_SIZE }                              from '../world/WorldConstants';
 import {
   type PlayerState,
   createPlayer,
@@ -72,6 +74,36 @@ function tickCamera(camera: CameraState, player: PlayerState): CameraState {
   return { ...camera, x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y };
 }
 
+// ─── Footstep detection ───────────────────────────────────────────────────────
+
+/**
+ * Frame indices within every run_* animation clip where a foot contacts
+ * the ground.  The Adam run cycle is 6 frames at 10 fps; the two contact
+ * frames are 0 (left foot) and 3 (right foot).
+ *
+ * A FOOTSTEP event is emitted the tick the animation enters one of these
+ * frames, keeping sound perfectly in sync with the sprite regardless of
+ * walk speed or frame rate.
+ */
+const FOOT_CONTACT_FRAMES = new Set([0, 3]);
+
+/**
+ * Stable EntityId used for the local player until a proper entity registry
+ * is wired up.  The audio system only needs it for future spatial SFX; the
+ * current footstep handler ignores it.
+ */
+const PLAYER_ENTITY_ID: EntityId = 'player';
+
+/**
+ * World-space offsets from player.x/y (sprite top-left) to the centre of
+ * the player's feet — used to sample the tile they are standing on.
+ *
+ * PLAYER_FOOT_OFFSET_X  = half the sprite width (16 / 2)
+ * PLAYER_FOOT_OFFSET_Y  = hitbox top + half hitbox height (24 + 4)
+ */
+const PLAYER_FOOT_OFFSET_X = 8;
+const PLAYER_FOOT_OFFSET_Y = PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height / 2; // 28
+
 // ─── Input → Velocity mapping ─────────────────────────────────────────────────
 
 const MOVE_SPEED = 55; // px/sec
@@ -111,6 +143,16 @@ export class SimulationModule {
   // Separate from the event queue: events are momentary, heldKeys is continuous.
   private heldKeys: Set<string> = new Set();
 
+  /**
+   * One-way event queue: simulation → audio / UI / renderer side-effects.
+   *
+   * Events are pushed here during each tick and drained once per display frame
+   * by the game loop via flushEvents().  Using a module-level buffer (rather
+   * than storing events inside GameState) keeps GameState purely immutable and
+   * mirrors the InputModule.flush() pattern already in use.
+   */
+  private pendingEvents: GameEvent[] = [];
+
   constructor() {
     const player = createPlayer(SPAWN_POINT.x, SPAWN_POINT.y);
 
@@ -126,6 +168,23 @@ export class SimulationModule {
 
     this.state     = initial;
     this.prevState = cloneState(initial);
+  }
+
+  // ─── Event queue ────────────────────────────────────────────────────────────
+
+  /**
+   * Return all events accumulated since the last call and clear the buffer.
+   *
+   * Called by the game loop once per display frame, after all simulation ticks
+   * for that frame have run.  Because multiple ticks may occur per frame (on
+   * slow hardware), events from every tick accumulate here and are delivered
+   * together — no events are lost between frames.
+   */
+  flushEvents(): GameEvent[] {
+    if (this.pendingEvents.length === 0) return [];
+    const events = this.pendingEvents;
+    this.pendingEvents = [];
+    return events;
   }
 
   // ─── Main tick ──────────────────────────────────────────────────────────────
@@ -165,6 +224,12 @@ export class SimulationModule {
         dt,
     );
     player = { ...player, x, y };
+
+    // ── Footstep events ───────────────────────────────────────────────────────
+    // Emit a FOOTSTEP when the animation enters a foot-contact frame.
+    // Comparing against prevState (snapped at the start of this tick) ensures
+    // we fire exactly once per frame transition, never on held frames.
+    this.collectFootstepEvent(this.prevState.player.animation, player);
 
     const camera = tickCamera(this.state.camera, player);
 
@@ -220,6 +285,39 @@ export class SimulationModule {
     }
 
     this.state = { ...this.state, player };
+  }
+
+  // ─── Footstep helper ─────────────────────────────────────────────────────────
+
+  /**
+   * Emit a FOOTSTEP event if the player's animation just entered a foot-contact
+   * frame during this tick.
+   *
+   * @param prevAnim - Animation state at the START of this tick (from prevState)
+   * @param player   - Player state at the END of this tick (post-tickPlayer + collision)
+   */
+  private collectFootstepEvent(
+      prevAnim: { current: string; frameIndex: number },
+      player:   PlayerState,
+  ): void {
+    const { animation } = player;
+
+    // Only fire during run animations
+    if (!animation.current.startsWith('run_')) return;
+
+    // Frame must have advanced or animation must have changed (transition resets to 0)
+    const frameChanged =
+        animation.frameIndex !== prevAnim.frameIndex ||
+        animation.current    !== prevAnim.current;
+
+    if (!frameChanged || !FOOT_CONTACT_FRAMES.has(animation.frameIndex)) return;
+
+    // Sample the tile under the player's feet
+    const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
+    const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
+    const tileType = getTileAt(this.state.world, footTX, footTY) as TileTypeValue;
+
+    this.pendingEvents.push({ type: 'FOOTSTEP', entityId: PLAYER_ENTITY_ID, tileType });
   }
 
   private applyMovement(): void {

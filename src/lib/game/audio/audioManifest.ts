@@ -84,6 +84,8 @@ export const AUDIO_MANIFEST: AudioManifest = {
   sfx: {
     // 'footstep.stone': { variants: ['/audio/sfx/footstep_stone_001.ogg', ...] },
     'footstep.carpet': {
+      maxConcurrent:  3,
+      pitchVariation: 0.08,  // ±4 % — subtle natural variation across 21 variants
       variants: [
         '/audio/sfx/footstep_carpet_001.ogg',
         '/audio/sfx/footstep_carpet_002.ogg',

@@ -65,6 +65,14 @@ export interface SFXConfig {
    * Default: 4.
    */
   maxConcurrent?: number;
+
+  /**
+   * Random pitch variation applied on each play call.
+   * A value of 0.1 yields a playbackRate in [0.95, 1.05], adding subtle
+   * natural variation that prevents the "machine-gun effect" on top of
+   * variant selection.  Default: 0 (no pitch variation).
+   */
+  pitchVariation?: number;
 }
 
 // ─── Root manifest ────────────────────────────────────────────────────────────

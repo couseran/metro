@@ -52,7 +52,30 @@
 			renderer.resize(canvas.clientWidth, canvas.clientHeight);
 			inputModule.mount(window);
 
-			const gameLoop = new GameLoop(inputModule, simulationModule, renderer);
+		// ── Audio ─────────────────────────────────────────────────────────────
+		// Constructed before GameLoop so it can be passed as the 4th argument.
+		// AudioContext must be resumed inside a user gesture (browser autoplay
+		// policy).  autoResume() registers a one-time listener; music starts and
+		// SFX buffers are pre-decoded the moment the first key or tap arrives.
+		const audioModule   = new AudioModule(AUDIO_MANIFEST.sfx);
+		const defaultConfig = AUDIO_MANIFEST.music.playlists[AUDIO_MANIFEST.music.defaultPlaylist];
+
+		audioModule.autoResume(window, () => {
+			// Preload every SFX that can fire during normal gameplay so the first
+			// footstep has no decode latency.
+			const activeSfxIds = Object.keys(AUDIO_MANIFEST.sfx);
+			if (activeSfxIds.length > 0) {
+				audioModule.sfx.preload(activeSfxIds).catch(console.error);
+			}
+
+			if (defaultConfig?.tracks.length > 0) {
+				audioModule.music.setPlaylist(defaultConfig).catch(console.error);
+			}
+		});
+
+		audio = audioModule;
+
+		const gameLoop = new GameLoop(inputModule, simulationModule, renderer, audioModule);
 
 			// Dev-only stats — tree-shaken in production builds
 			if (import.meta.env.DEV) {
@@ -67,20 +90,6 @@
 			input = inputModule;
 
 			// ── Audio ─────────────────────────────────────────────────────────────
-			// AudioContext must be resumed inside a user gesture (browser autoplay
-			// policy).  autoResume() registers a one-time listener and starts the
-			// default playlist the moment the first key or tap is received.
-			const audioModule   = new AudioModule();
-			const defaultConfig = AUDIO_MANIFEST.music.playlists[AUDIO_MANIFEST.music.defaultPlaylist];
-
-			if (defaultConfig?.tracks.length > 0) {
-				audioModule.autoResume(window, () => {
-					audioModule.music.setPlaylist(defaultConfig).catch(console.error);
-				});
-			}
-
-			audio = audioModule;
-
 			window.addEventListener('resize', onResize);
 			status = 'running';
 

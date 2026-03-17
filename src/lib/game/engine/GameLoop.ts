@@ -5,6 +5,7 @@
 import type { InputModule }      from './InputModule.ts';
 import type { SimulationModule } from './SimulationModule';
 import type { RendererModule }   from './RendererModule';
+import type { AudioModule }      from '../audio/AudioModule';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ export class GameLoop {
   private input:      InputModule;
   private simulation: SimulationModule;
   private renderer:   RendererModule;
+  private audio:      AudioModule | undefined;
 
   private rafHandle:   number  = 0;
   private running:     boolean = false;
@@ -65,10 +67,12 @@ export class GameLoop {
       input:      InputModule,
       simulation: SimulationModule,
       renderer:   RendererModule,
+      audio?:     AudioModule,
   ) {
     this.input      = input;
     this.simulation = simulation;
     this.renderer   = renderer;
+    this.audio      = audio;
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -155,12 +159,22 @@ export class GameLoop {
         alpha,
     );
 
+    // ── 4. Audio event dispatch ───────────────────────────────────────────────
+    // Flush all events accumulated across every simulation tick this frame and
+    // forward them to the audio module in one batch.  Batching avoids per-tick
+    // overhead and ensures the audio system always sees a complete frame's worth
+    // of events rather than a partial tick.
+    if (this.audio) {
+      const events = this.simulation.flushEvents();
+      if (events.length > 0) this.audio.handleEvents(events);
+    }
+
     this.frameCount++;
 
-    // ── 4. Stats (optional) ───────────────────────────────────────────────────
+    // ── 5. Stats (optional, dev only) ────────────────────────────────────────
     this.updateStats(frameTime);
 
-    // ── 5. Schedule next frame ────────────────────────────────────────────────
+    // ── 6. Schedule next frame ────────────────────────────────────────────────
     this.rafHandle = requestAnimationFrame(this.loop);
   };
 
