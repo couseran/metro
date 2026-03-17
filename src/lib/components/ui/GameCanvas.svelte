@@ -11,6 +11,8 @@
 	import { RendererModule }        from '$lib/game/engine/RendererModule';
 	import { loadAssets }            from '$lib/game/assets/AssetLoader';
 	import { MANIFEST }              from '$lib/game/assets/manifest';
+	import { AudioModule }           from '$lib/game/audio/AudioModule';
+	import { AUDIO_MANIFEST }        from '$lib/game/audio/audioManifest';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 	let canvas:  HTMLCanvasElement;
@@ -21,6 +23,7 @@
 	// Module refs kept for cleanup
 	let loop:  GameLoop    | null = null;
 	let input: InputModule | null = null;
+	let audio: AudioModule | null = null;
 
 	// ── Resize handler ─────────────────────────────────────────────────────────
 	let renderer: RendererModule | null = null;
@@ -63,6 +66,21 @@
 			loop  = gameLoop;
 			input = inputModule;
 
+			// ── Audio ─────────────────────────────────────────────────────────────
+			// AudioContext must be resumed inside a user gesture (browser autoplay
+			// policy).  autoResume() registers a one-time listener and starts the
+			// default playlist the moment the first key or tap is received.
+			const audioModule   = new AudioModule();
+			const defaultConfig = AUDIO_MANIFEST.music.playlists[AUDIO_MANIFEST.music.defaultPlaylist];
+
+			if (defaultConfig?.tracks.length > 0) {
+				audioModule.autoResume(window, () => {
+					audioModule.music.setPlaylist(defaultConfig).catch(console.error);
+				});
+			}
+
+			audio = audioModule;
+
 			window.addEventListener('resize', onResize);
 			status = 'running';
 
@@ -76,6 +94,7 @@
 	onDestroy(() => {
 		loop?.stop();
 		input?.unmount();
+		audio?.dispose();
 		window.removeEventListener('resize', onResize);
 	});
 </script>
