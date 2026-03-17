@@ -59,12 +59,17 @@ function cloneState(state: GameState): GameState {
 
 // ─── Camera ───────────────────────────────────────────────────────────────────
 
+// Half the default Adam sprite size (16×32).
+// player.x/y is the top-left of the sprite, so we shift to the visual center.
+const PLAYER_CAM_OFFSET_X = 8;
+const PLAYER_CAM_OFFSET_Y = 16;
+
 /**
- * Snap camera to player position — instant follow, no lag.
+ * Snap camera to player center — instant follow, no lag.
  * Replace with a lerp here when a specific camera-feel is desired.
  */
 function tickCamera(camera: CameraState, player: PlayerState): CameraState {
-  return { ...camera, x: player.x, y: player.y };
+  return { ...camera, x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y };
 }
 
 // ─── Input → Velocity mapping ─────────────────────────────────────────────────
@@ -116,7 +121,7 @@ export class SimulationModule {
       world:            createInitialWorld(),
       props:            new Map(),
       propSpatialIndex: new Map(),
-      camera:           { x: player.x, y: player.y, zoom: 1 },
+      camera:           { x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y, zoom: 1 },
     };
 
     this.state     = initial;
