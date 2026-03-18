@@ -15,6 +15,28 @@ import type { WorldState } from '../types/world';
 import { TileType }        from '../types/world';
 import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from './WorldConstants';
 
+// ─── PixelBox ─────────────────────────────────────────────────────────────────
+
+/**
+ * Axis-aligned bounding box in world-space pixels.
+ * Used for sub-tile prop collision (props with any solidInset side > 0).
+ */
+export interface PixelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function rectsOverlap(
+    ax: number, ay: number, aw: number, ah: number,
+    bx: number, by: number, bw: number, bh: number,
+): boolean {
+  const EPS = 0.01;
+  return ax < bx + bw - EPS && ax + aw > bx + EPS &&
+         ay < by + bh - EPS && ay + ah > by + EPS;
+}
+
 // ─── Hitbox ───────────────────────────────────────────────────────────────────
 
 /**
@@ -41,9 +63,9 @@ export interface Hitbox {
  */
 export const PLAYER_HITBOX: Hitbox = {
   offsetX: 1,
-  offsetY: 24,
+  offsetY: 29,
   width:   14,
-  height:  8,
+  height:  4,
 };
 
 // ─── Solid tile registry ──────────────────────────────────────────────────────
@@ -156,6 +178,7 @@ export function resolveMovement(
     world:          WorldState,
     dt:             number,
     propSolidIndex: Set<string> | null = null,
+    propSolidBoxes: Map<string, PixelBox> | null = null,
 ): { x: number; y: number } {
   const dtSec = dt / 1000;
 
@@ -179,6 +202,17 @@ export function resolveMovement(
         newX = (wallTX + 1) * TILE_SIZE - hb.offsetX;
       }
     }
+
+    // Sub-tile pixel-box collisions (props with a sub-tile solidInset).
+    // These are NOT in propSolidIndex, so tile-snapping above won't catch them.
+    if (propSolidBoxes) {
+      for (const box of propSolidBoxes.values()) {
+        if (rectsOverlap(newX + hb.offsetX, hbTop, hbWidth, hbHeight, box.x, box.y, box.w, box.h)) {
+          if (vx > 0) newX = Math.min(newX, box.x           - hb.offsetX - hb.width);
+          else        newX = Math.max(newX, box.x + box.w   - hb.offsetX           );
+        }
+      }
+    }
   }
 
   // ── Y axis ──────────────────────────────────────────────────────────────────
@@ -199,6 +233,16 @@ export function resolveMovement(
         // Hit a ceiling tile above — push top of hitbox to tile bottom edge
         const wallTY = Math.floor(hbTop / TILE_SIZE);
         newY = (wallTY + 1) * TILE_SIZE - hb.offsetY;
+      }
+    }
+
+    // Sub-tile pixel-box collisions on Y axis.
+    if (propSolidBoxes) {
+      for (const box of propSolidBoxes.values()) {
+        if (rectsOverlap(hbLeft, newY + hb.offsetY, hbWidth, hbHeight, box.x, box.y, box.w, box.h)) {
+          if (vy > 0) newY = Math.min(newY, box.y           - hb.offsetY - hb.height);
+          else        newY = Math.max(newY, box.y + box.h   - hb.offsetY            );
+        }
       }
     }
   }

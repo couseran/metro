@@ -32,6 +32,15 @@
 		renderer?.resize(canvas.clientWidth, canvas.clientHeight);
 	}
 
+	// ── Debug key handler ───────────────────────────────────────────────────────
+	// Backtick  (`)  — Y-sort draw-order overlay
+	// Backslash (\)  — collision hitbox overlay
+	function onKeyDown(e: KeyboardEvent) {
+		if (!renderer) return;
+		if (e.key === '`') renderer.debugSortOverlay  = !renderer.debugSortOverlay;
+		if (e.key === '\\') renderer.debugHitboxOverlay = !renderer.debugHitboxOverlay;
+	}
+
 	// ── Lifecycle ──────────────────────────────────────────────────────────────
 	onMount(async () => {
 		try {
@@ -91,6 +100,7 @@
 
 			// ── Audio ─────────────────────────────────────────────────────────────
 			window.addEventListener('resize', onResize);
+			window.addEventListener('keydown', onKeyDown);
 			status = 'running';
 
 		} catch (e) {
@@ -105,6 +115,7 @@
 		input?.unmount();
 		audio?.dispose();
 		window.removeEventListener('resize', onResize);
+		window.removeEventListener('keydown', onKeyDown);
 	});
 </script>
 

@@ -17,7 +17,6 @@
 //   • Definitions can be loaded lazily or from external data files.
 //   • The registry can be inspected/iterated at runtime (editor tools, debug UI).
 //   • Adding a new prop never requires modifying this file.
-import './props/furnitures/chair/PropDefinitionRegistration.ts'
 
 import type { PropDefinition } from '$lib/game/types/props.ts';
 
@@ -76,3 +75,8 @@ export function allPropDefinitions(): IterableIterator<PropDefinition> {
 //   data/props/lighting.ts   — campfires, torches, lanterns
 //
 // (None of these files exist yet — add them as prop artwork is finalised.)
+//
+// Import registration files from the game's entry point (e.g. SimulationModule.ts),
+// NOT here — side-effect imports in this file cause a circular dependency because
+// registration files import registerPropDefinition() back from this module, and
+// ES imports are hoisted before `registry` is initialised.

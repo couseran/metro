@@ -140,6 +140,45 @@ export interface GrowthStageDefinition {
     spriteVariant: number;
 }
 
+// ─── Collision inset ──────────────────────────────────────────────────────────
+
+/**
+ * Per-side pixel inset for a prop's collision AABB.
+ *
+ * All values are in world-space pixels and shrink the collision box inward from
+ * the corresponding edge of the tile footprint.  Zero on all sides means the
+ * collision box is exactly the tile-aligned footprint (full-tile blocking).
+ *
+ * When a prop is rotated, PropSystem rotates this inset geometrically so the
+ * collision box remains correct for every orientation.
+ */
+export interface PropCollisionInset {
+    /** Pixels to shrink from the top edge of the footprint. */
+    top:    number;
+    /** Pixels to shrink from the right edge of the footprint. */
+    right:  number;
+    /** Pixels to shrink from the bottom edge of the footprint. */
+    bottom: number;
+    /** Pixels to shrink from the left edge of the footprint. */
+    left:   number;
+}
+
+/**
+ * Factory helpers for PropCollisionInset — follows the CSS shorthand convention.
+ *
+ *   solidInset(4)            → all four sides = 4
+ *   solidInset(0, 4)         → top/bottom = 0, left/right = 4
+ *   solidInset(0, 4, 6, 4)   → top=0, right=4, bottom=6, left=4
+ */
+export function solidInset(uniform: number): PropCollisionInset;
+export function solidInset(vertical: number, horizontal: number): PropCollisionInset;
+export function solidInset(top: number, right: number, bottom: number, left: number): PropCollisionInset;
+export function solidInset(a: number, b?: number, c?: number, d?: number): PropCollisionInset {
+    if (b === undefined) return { top: a, right: a, bottom: a, left: a };
+    if (c === undefined) return { top: a, right: b, bottom: a, left: b };
+    return { top: a, right: b, bottom: c, left: d! };
+}
+
 // ─── Prop definition ──────────────────────────────────────────────────────────
 
 /**
@@ -205,6 +244,44 @@ export interface PropDefinition {
      * Empty string for stateless props.
      */
     defaultStateId: string;
+
+    // ── Collision inset ───────────────────────────────────────────────────────
+
+    /**
+     * Per-side pixel inset that shrinks the collision box relative to the prop's
+     * tile-aligned footprint.
+     *
+     * undefined / all-zeros → full-tile blocking via propSolidIndex (fast tile-snapped
+     *   push-back, no per-prop AABB test at runtime).
+     *
+     * any side > 0 → sub-tile AABB stored in propSolidBoxes (pixel-accurate push-back).
+     *   The prop is NOT added to propSolidIndex in this case.
+     *   When a rotation is applied, the inset is rotated geometrically so the collision
+     *   box stays correct (e.g. bottom-inset of a 0° chair becomes left-inset at 90°CW).
+     *
+     * Build with the solidInset() helper:
+     *   solidInset(4)            → 4 px on every side
+     *   solidInset(0, 4)         → 0 top/bottom, 4 left/right
+     *   solidInset(0, 4, 6, 4)   → top=0, right=4, bottom=6, left=4
+     */
+    solidInset?: PropCollisionInset;
+
+    // ── Sort-Y offset ─────────────────────────────────────────────────────────
+
+    /**
+     * Pixel delta added to the default Y-sort key for this prop type.
+     *
+     * Default sort key: (prop.y + prop.height) * TILE_SIZE (bottom edge of footprint).
+     * Positive offset → prop draws later / in front; negative → earlier / behind.
+     *
+     * This is a purely visual depth-ordering knob, independent of solidInset.
+     * Use the debug sort overlay (backtick key) to tune interactively.
+     *
+     * Rule of thumb when pairing with an asymmetric bottom inset:
+     *   sortYOffset = -(solidInset.bottom)
+     * This aligns the visual depth crossover with the physical collision boundary.
+     */
+    sortYOffset?: number;
 
     // ── Destruction ───────────────────────────────────────────────────────────
 

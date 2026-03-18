@@ -23,10 +23,12 @@
 // counter passed through GameState.
 
 import type { EntityId, TileCoord }   from '$lib/game/types/primitives.ts';
-import type { PropState, PropLayerSlot, PropDefinition, GrowthStageDefinition } from '$lib/game/types/props.ts';
+import type { PropState, PropLayerSlot, PropDefinition, GrowthStageDefinition, PropCollisionInset } from '$lib/game/types/props.ts';
 import type { ItemStack }              from '$lib/game/types/inventory.ts';
 import { getPropDefinition }           from '$lib/game/data/propDefinitions.ts';
 import { rollLoot }                    from '$lib/game/data/lootTables.ts';
+import type { PixelBox }               from '$lib/game/world/TileCollision.ts';
+import { TILE_SIZE }                   from '$lib/game/world/WorldConstants.ts';
 
 // ─── GameState shape ──────────────────────────────────────────────────────────
 // Import the runtime GameState from SimulationModule (the sole source of truth
@@ -43,6 +45,43 @@ export function _resetPropIdCounter(): void { _nextPropId = 1; }
 
 function generatePropId(): EntityId {
     return `prop_${_nextPropId++}`;
+}
+
+// ─── Collision inset helpers ──────────────────────────────────────────────────
+
+/**
+ * Returns true when a prop definition uses a sub-tile pixel AABB for collision
+ * (i.e. at least one side of solidInset is > 0).
+ *
+ * When false, the prop uses the faster tile-snapped propSolidIndex.
+ * When true, the prop uses propSolidBoxes and is NOT in propSolidIndex.
+ */
+function hasSubTileCollision(def: PropDefinition): boolean {
+    const i = def.solidInset;
+    if (!i) return false;
+    return i.top > 0 || i.right > 0 || i.bottom > 0 || i.left > 0;
+}
+
+/**
+ * Rotate a PropCollisionInset to match a prop's on-screen orientation.
+ *
+ * solidInset is always defined in the definition's own (unrotated) coordinate
+ * space.  When the prop is rotated, the inset must be remapped so the collision
+ * box shrinks from the correct physical edges.
+ *
+ * Rotation mapping (which original face is now facing which direction):
+ *   rot0 (  0°): identity
+ *   rot1 ( 90°CW): top←left, right←top, bottom←right, left←bottom
+ *   rot2 (180°):  top←bottom, right←left, bottom←top, left←right
+ *   rot3 (270°CW): top←right, right←bottom, bottom←left, left←top
+ */
+function rotateInset(i: PropCollisionInset, rotation: 0 | 1 | 2 | 3): PropCollisionInset {
+    switch (rotation) {
+        case 0: return i;
+        case 1: return { top: i.left,   right: i.top,    bottom: i.right,  left: i.bottom };
+        case 2: return { top: i.bottom, right: i.left,   bottom: i.top,    left: i.right  };
+        case 3: return { top: i.right,  right: i.bottom, bottom: i.left,   left: i.top    };
+    }
 }
 
 // ─── Footprint helpers ────────────────────────────────────────────────────────
@@ -169,6 +208,7 @@ export function buildPropLayerIndex(props: Map<EntityId, PropState>): Map<string
 
 /**
  * Build a fresh propSolidIndex from the full props map.
+ * Only includes props with solidInset === 0 (full-tile blockers).
  * O(n × footprint_size) — call only on chunk load/unload, not per tick.
  */
 export function buildPropSolidIndex(props: Map<EntityId, PropState>): Set<string> {
@@ -180,26 +220,42 @@ export function buildPropSolidIndex(props: Map<EntityId, PropState>): Set<string
 }
 
 /**
- * Add one prop's footprint tiles to an existing layerIndex and solidIndex.
+ * Build a fresh propSolidBoxes map from the full props map.
+ * Only includes props with solidInset > 0 (sub-tile pixel-box blockers).
+ * O(n) — call only on chunk load/unload, not per tick.
+ */
+export function buildPropSolidBoxes(props: Map<EntityId, PropState>): Map<EntityId, PixelBox> {
+    const boxes = new Map<EntityId, PixelBox>();
+    for (const prop of props.values()) {
+        _indexPropIntoSolidBoxes(prop, boxes);
+    }
+    return boxes;
+}
+
+/**
+ * Add one prop's footprint to an existing layerIndex, solidIndex, and solidBoxes.
  * Used for incremental updates after placement or chunk load.
  */
 export function indexProp(
     prop:       PropState,
     layerIndex: Map<string, PropLayerSlot>,
     solidIndex: Set<string>,
+    solidBoxes: Map<EntityId, PixelBox>,
 ): void {
     _indexPropIntoLayerIndex(prop, layerIndex);
     _indexPropIntoSolidIndex(prop, solidIndex);
+    _indexPropIntoSolidBoxes(prop, solidBoxes);
 }
 
 /**
- * Remove one prop's footprint tiles from an existing layerIndex and solidIndex.
+ * Remove one prop's footprint from an existing layerIndex, solidIndex, and solidBoxes.
  * Used for incremental updates after removal or chunk unload.
  */
 export function deindexProp(
     prop:       PropState,
     layerIndex: Map<string, PropLayerSlot>,
     solidIndex: Set<string>,
+    solidBoxes: Map<EntityId, PixelBox>,
 ): void {
     const def = getPropDefinition(prop.type);
     const footprint = getPropFootprint(prop);
@@ -220,6 +276,8 @@ export function deindexProp(
             solidIndex.delete(key);
         }
     }
+    // Remove pixel box (no-op if prop had solidInset === 0)
+    solidBoxes.delete(prop.id);
 }
 
 // ─── Internal index helpers ───────────────────────────────────────────────────
@@ -236,6 +294,9 @@ function _indexPropIntoSolidIndex(prop: PropState, solid: Set<string>): void {
     const def = getPropDefinition(prop.type);
     if (!def) return;
 
+    // Props with any sub-tile inset use propSolidBoxes instead — skip here.
+    if (hasSubTileCollision(def)) return;
+
     // Door in 'open' state is not solid regardless of solidMask
     const isDoorOpen = def.interactionType === 'door' && prop.stateId === 'open';
     if (isDoorOpen) return;
@@ -245,6 +306,42 @@ function _indexPropIntoSolidIndex(prop: PropState, solid: Set<string>): void {
             solid.add(`${tile.x},${tile.y}`);
         }
     }
+}
+
+/**
+ * Add a sub-tile pixel AABB for props whose solidInset has at least one side > 0.
+ * The box is the prop's effective footprint shrunk per-side by the (rotated) inset.
+ * Skipped for full-tile props (those use propSolidIndex instead).
+ *
+ * The inset is rotated to match the prop's orientation before the box is built, so
+ * the physical collision shape always aligns with the visual sprite at any rotation.
+ */
+function _indexPropIntoSolidBoxes(prop: PropState, boxes: Map<EntityId, PixelBox>): void {
+    const def = getPropDefinition(prop.type);
+    if (!def) return;
+
+    if (!hasSubTileCollision(def)) return;
+
+    // Door in 'open' state is passable
+    if (def.interactionType === 'door' && prop.stateId === 'open') return;
+
+    // Skip if there are no solid cells in the mask
+    if (!def.solidMask.some(row => row.some(Boolean))) return;
+
+    // Rotate the definition inset to match the prop's on-screen orientation.
+    const ri = rotateInset(def.solidInset!, prop.rotation);
+
+    const { w, h } = getEffectiveDimensions(prop.width, prop.height, prop.rotation);
+    const boxW = w * TILE_SIZE - ri.left - ri.right;
+    const boxH = h * TILE_SIZE - ri.top  - ri.bottom;
+    if (boxW <= 0 || boxH <= 0) return; // inset larger than footprint — skip
+
+    boxes.set(prop.id, {
+        x: prop.x * TILE_SIZE + ri.left,
+        y: prop.y * TILE_SIZE + ri.top,
+        w: boxW,
+        h: boxH,
+    });
 }
 
 // ─── Placement ────────────────────────────────────────────────────────────────
@@ -383,15 +480,17 @@ export function placeProp(
     const newProps      = new Map(state.props);
     const newLayerIndex = new Map(state.propLayerIndex);
     const newSolidIndex = new Set(state.propSolidIndex);
+    const newSolidBoxes = new Map(state.propSolidBoxes);
 
     newProps.set(propId, prop);
-    indexProp(prop, newLayerIndex, newSolidIndex);
+    indexProp(prop, newLayerIndex, newSolidIndex, newSolidBoxes);
 
     const newState: GameState = {
         ...state,
         props:          newProps,
         propLayerIndex: newLayerIndex,
         propSolidIndex: newSolidIndex,
+        propSolidBoxes: newSolidBoxes,
     };
 
     return { state: newState, propId };
@@ -410,11 +509,12 @@ export function removeProp(state: GameState, propId: EntityId): GameState {
     const newProps      = new Map(state.props);
     const newLayerIndex = new Map(state.propLayerIndex);
     const newSolidIndex = new Set(state.propSolidIndex);
+    const newSolidBoxes = new Map(state.propSolidBoxes);
 
     newProps.delete(propId);
-    deindexProp(prop, newLayerIndex, newSolidIndex);
+    deindexProp(prop, newLayerIndex, newSolidIndex, newSolidBoxes);
 
-    return { ...state, props: newProps, propLayerIndex: newLayerIndex, propSolidIndex: newSolidIndex };
+    return { ...state, props: newProps, propLayerIndex: newLayerIndex, propSolidIndex: newSolidIndex, propSolidBoxes: newSolidBoxes };
 }
 
 // ─── Damage ───────────────────────────────────────────────────────────────────
@@ -512,7 +612,8 @@ function _toggleDoor(state: GameState, prop: PropState, def: PropDefinition): In
     const newProps = new Map(state.props);
     newProps.set(prop.id, updatedProp);
 
-    // Rebuild solid index for the affected prop
+    // Rebuild solid index for the affected prop.
+    // Doors are assumed to have no sub-tile inset (full-tile blocking when closed).
     const newSolidIndex = new Set(state.propSolidIndex);
     const footprint = getPropFootprint(prop);
 
@@ -570,14 +671,15 @@ export function resizeProp(
     // De-index old footprint, re-index new footprint
     const newLayerIndex = new Map(state.propLayerIndex);
     const newSolidIndex = new Set(state.propSolidIndex);
-    deindexProp(prop, newLayerIndex, newSolidIndex);
+    const newSolidBoxes = new Map(state.propSolidBoxes);
+    deindexProp(prop, newLayerIndex, newSolidIndex, newSolidBoxes);
 
     const resized: PropState = { ...prop, width: newWidth };
     const newProps = new Map(state.props);
     newProps.set(propId, resized);
-    indexProp(resized, newLayerIndex, newSolidIndex);
+    indexProp(resized, newLayerIndex, newSolidIndex, newSolidBoxes);
 
-    return { ...state, props: newProps, propLayerIndex: newLayerIndex, propSolidIndex: newSolidIndex };
+    return { ...state, props: newProps, propLayerIndex: newLayerIndex, propSolidIndex: newSolidIndex, propSolidBoxes: newSolidBoxes };
 }
 
 // ─── Tick ─────────────────────────────────────────────────────────────────────

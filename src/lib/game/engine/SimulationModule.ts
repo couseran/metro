@@ -8,6 +8,15 @@ import type { GameEvent }                         from '../types/events';
 import { createInitialWorld, SPAWN_POINT }        from '../world/WorldFactory';
 import { resolveMovement, PLAYER_HITBOX, getTileAt } from '../world/TileCollision';
 import { TILE_SIZE }                              from '../world/WorldConstants';
+import { placeProp, removeProp }                  from './PropSystem';
+import { getPropDefinition }                      from '../data/propDefinitions';
+import type { PixelBox }                          from '../world/TileCollision';
+
+// ─── Prop registration (side-effect imports) ──────────────────────────────────
+// These must be imported here (the game entry point) and NOT inside
+// propDefinitions.ts — ES imports are hoisted before module body code runs,
+// which would put them before `registry` is initialised (temporal dead zone).
+import '../data/props/furnitures/chair/PropDefinitionRegistration';
 import {
   type PlayerState,
   createPlayer,
@@ -46,8 +55,21 @@ export interface GameState {
    * Updated alongside propLayerIndex.  Queried by resolveMovement() and the NPC
    * pathfinder for O(1) per-tile solid checks.  Automatically updated when a door
    * toggles, a plant grows past a solid stage, or any prop is placed/removed.
+   *
+   * Only populated for props whose solidInset is undefined or all-zero (full-tile blockers).
+   * Props with any sub-tile inset use propSolidBoxes instead.
    */
   propSolidIndex:   Set<string>;
+
+  /**
+   * Pixel-space AABBs for props with any sub-tile solidInset (at least one side > 0).
+   * Key: EntityId of the prop.
+   *
+   * These props are NOT in propSolidIndex.  resolveMovement() checks this map
+   * after the tile/propSolidIndex pass and performs pixel-accurate push-back,
+   * letting the player walk closer than a full tile boundary.
+   */
+  propSolidBoxes:   Map<EntityId, PixelBox>;
 
   /**
    * Camera position in world-space pixels — tracks the player.
@@ -150,6 +172,31 @@ function resolveMovementVector(heldKeys: Set<string>, speed: number): MovementVe
   return { vx: vx * speed, vy: vy * speed };
 }
 
+// ─── Debug helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Return the tile directly in front of the player and the chair rotation that
+ * would face the player from that tile.
+ *
+ * Rotation convention (matches InteriorProps.ts sprite order):
+ *   0 = chair front faces south  (player looks north  / 'up')
+ *   1 = chair front faces west   (player looks east   / 'right')
+ *   2 = chair front faces north  (player looks south  / 'down')
+ *   3 = chair front faces east   (player looks west   / 'left')
+ */
+function getFrontTile(
+    footTX:    number,
+    footTY:    number,
+    direction: 'up' | 'down' | 'left' | 'right',
+): { tx: number; ty: number; rotation: 0 | 1 | 2 | 3 } {
+    switch (direction) {
+        case 'up':    return { tx: footTX,     ty: footTY - 1, rotation: 0 };
+        case 'down':  return { tx: footTX,     ty: footTY + 1, rotation: 2 };
+        case 'left':  return { tx: footTX - 1, ty: footTY,     rotation: 3 };
+        case 'right': return { tx: footTX + 1, ty: footTY,     rotation: 1 };
+    }
+}
+
 // ─── SimulationModule ─────────────────────────────────────────────────────────
 
 export class SimulationModule {
@@ -181,6 +228,7 @@ export class SimulationModule {
       props:            new Map(),
       propLayerIndex:   new Map(),
       propSolidIndex:   new Set(),
+      propSolidBoxes:   new Map(),
       camera:           { x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y, zoom: 1 },
     };
 
@@ -241,6 +289,7 @@ export class SimulationModule {
         this.state.world,
         dt,
         this.state.propSolidIndex,
+        this.state.propSolidBoxes,
     );
     player = { ...player, x, y };
 
@@ -301,6 +350,31 @@ export class SimulationModule {
       case 'Digit1': player = sit(player, 'sitting_1', 'right'); break;
       case 'Digit2': player = sit(player, 'sitting_2', 'left');  break;
       case 'Digit3': player = sit(player, 'sitting_3', 'left');  break;
+
+      // ── Debug: spawn / remove chair ────────────────────────────────────────
+      case 'KeyP': {
+        const chairDef = getPropDefinition('chair');
+        if (!chairDef) break;
+        const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
+        const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
+        const { tx, ty, rotation } = getFrontTile(footTX, footTY, player.direction);
+        const { state: withChair } = placeProp(this.state, chairDef, tx, ty, rotation);
+        this.state = withChair;
+        break;
+      }
+
+      case 'KeyR': {
+        const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
+        const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
+        const { tx, ty, rotation: expectedRotation } = getFrontTile(footTX, footTY, player.direction);
+        const slot   = this.state.propLayerIndex.get(`${tx},${ty}`);
+        const propId = slot?.object ?? null;
+        if (!propId) break;
+        const prop = this.state.props.get(propId);
+        if (!prop || prop.type !== 'chair' || prop.rotation !== expectedRotation) break;
+        this.state = removeProp(this.state, propId);
+        break;
+      }
     }
 
     this.state = { ...this.state, player };

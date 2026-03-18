@@ -1,26 +1,68 @@
-import { registerPropDefinition } from '../../../propDefinitions.ts';
-import type {PropDefinition} from "$lib/game/types/props.ts";
+import { registerPropDefinition }        from '../../../propDefinitions';
+import type { PropDefinition }           from '$lib/game/types/props';
+import { solidInset }                    from '$lib/game/types/props';
+import { TileType }                      from '$lib/game/types/world';
 
-registerPropDefinition(<PropDefinition>{
-  type:       'chair',
-  layer:      'object',
-  defaultWidth:  1,
-  defaultHeight: 1,
-  resizable:  false,
-  rotatable:  true,
+registerPropDefinition({
+    type:          'chair',
+    layer:         'object',
 
-  // Solid mask: 1 = solid, 0 = passable. Row-major, [row][col].
-  // For a 1×1 prop this is always [[1]].
-  solidMask: [[1]],
+    // ── Size ──────────────────────────────────────────────────────────────────
+    defaultWidth:  1,
+    defaultHeight: 1,
+    resizable:     false,
+    minWidth:      1,
+    maxWidth:      1,
 
-  placementConstraints: [{ tileType: 'CARPET' }, { tileType: 'STONE' }],
+    // ── Solid mask ────────────────────────────────────────────────────────────
+    solidMask: [[true]],
 
-  interactionType: 'seat',
-  breakable: true,
-  breakTool: null,     // null = any tool / bare hand
-  breakHits: 1,
-  maxHealth: 1,
+    // Shrink the collision box by 3 px on every side so the player can step
+    // slightly inside the tile edge — makes the chair feel less "blocky".
+    // The inset is rotated automatically when the chair is placed at 90°/180°/270°.
+    solidInset: solidInset(1,5,3,3),
 
-  lootTableId: 'chair_drop',    // null if no drops
-  npcPathable: false,           // blocks NPC pathfinding
-});
+    // ── Sort-Y offset ─────────────────────────────────────────────────────────
+    // Align the visual depth crossover with the physical collision boundary:
+    //   player crosses behind the chair exactly when they can physically step there.
+    sortYOffset: -5,
+
+    // ── Placement ─────────────────────────────────────────────────────────────
+    placementConstraints: [
+        { type: 'allowed_tile_types', tileTypes: [TileType.CARPET, TileType.STONE] },
+        { type: 'layer_must_be_empty', layer: 'object' },
+    ],
+    rotatable:      true,
+    rotationSteps:  4,
+
+    // ── Interaction ───────────────────────────────────────────────────────────
+    interactionType:    'seat',
+    interactionTrigger: 'key_e',
+    defaultStateId:     '',
+
+    // ── Destruction ───────────────────────────────────────────────────────────
+    breakable:    true,
+    maxHealth:    1,
+    requiredTool: null,   // any tool or bare hands
+    minToolTier:  0,
+
+    // ── Loot ──────────────────────────────────────────────────────────────────
+    lootTableId: 'chair_drop',
+
+    // ── Animation ─────────────────────────────────────────────────────────────
+    animated:      false,
+    animationMode: null,
+    frameCount:    1,
+    frameDuration: 0,
+
+    // ── Growth ────────────────────────────────────────────────────────────────
+    growthStages: null,
+
+    // ── NPC awareness ─────────────────────────────────────────────────────────
+    npcPathable:            false,
+    npcCanInteract:         true,
+    npcInteractionBehavior: 'sit',
+
+    // ── Sprite ────────────────────────────────────────────────────────────────
+    spriteLayout: 'single',
+} satisfies PropDefinition);

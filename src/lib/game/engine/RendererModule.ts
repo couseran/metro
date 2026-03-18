@@ -31,6 +31,14 @@ import type { LoadedAssets } from '../assets/AssetLoader';
 import { lerpCamera, applyViewportTransform } from '../rendering/ViewportUtils';
 import { drawGroundLayer, drawFloorProps }    from '../rendering/layers/GroundLayer';
 import { buildWorldLayer, drawWorldLayer }    from '../rendering/layers/WorldLayer';
+import { drawSortDebugOverlay }              from '../rendering/debug/DebugSortOverlay';
+import { drawHitboxDebugOverlay }            from '../rendering/debug/DebugHitboxOverlay';
+
+// ─── Prop sprite registration (side-effect imports) ───────────────────────────
+// Import here (the renderer entry point) so sprites are registered before the
+// first draw call.  Must NOT live inside PropSpriteRegistry.ts — same circular
+// dependency risk as PropDefinitionRegistration / propDefinitions.ts.
+import '../rendering/props/props/InteriorProps';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +57,24 @@ export class RendererModule {
   private config: RendererConfig;
   private assets: LoadedAssets | null = null;
   private dpr:    number = 1;
+
+  /**
+   * Toggle the Y-sort debug overlay.
+   * When `true`, a colored horizontal line is drawn at the sortY of every
+   * world-layer object after Pass 2, making draw-order decisions visible.
+   * Keybind: backtick (`)
+   */
+  public debugSortOverlay = false;
+
+  /**
+   * Toggle the hitbox debug overlay.
+   * When `true`, draws the collision AABBs for all props and the player:
+   *   orange      — tile-snapped prop solids (propSolidIndex, full TILE_SIZE boxes)
+   *   yellow/gold — sub-tile prop pixel boxes (propSolidBoxes, precise AABBs)
+   *   green       — player physical hitbox
+   * Keybind: backslash (\)
+   */
+  public debugHitboxOverlay = false;
 
   constructor(config: RendererConfig) {
     this.config = config;
@@ -129,6 +155,18 @@ export class RendererModule {
         canvas.width, canvas.height,
     );
     drawWorldLayer(this.ctx, worldObjects, effectiveScale);
+
+    // ── Debug: Y-sort overlay ────────────────────────────────────────────────
+    // Colored horizontal lines at each world-object's sortY.  Backtick key.
+    if (this.debugSortOverlay) {
+      drawSortDebugOverlay(this.ctx, worldObjects, effectiveScale);
+    }
+
+    // ── Debug: hitbox overlay ─────────────────────────────────────────────────
+    // Collision AABBs for all props and the player.  Backslash key.
+    if (this.debugHitboxOverlay) {
+      drawHitboxDebugOverlay(this.ctx, current, prev, alpha, effectiveScale);
+    }
 
     // ── Pass 3: overlay (future) ─────────────────────────────────────────────
     // Particles, floating labels, roof tiles, etc.

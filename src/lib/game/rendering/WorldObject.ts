@@ -31,9 +31,16 @@ export interface WorldObject {
    * Conventions:
    *   - Tile at row ty       →  sortY = (ty + 1) * TILE_SIZE
    *   - Entity at pixel y    →  sortY = y + hitbox.offsetY + hitbox.height
-   *   - Prop at tile py      →  sortY = bottom edge of the rendered sprite
+   *   - Prop at tile py      →  sortY = (py + height) * TILE_SIZE + sortYOffset
    */
   sortY: number;
+
+  /**
+   * Object category — used by the debug sort overlay to colour-code draw-order
+   * lines.  Present only when the debug overlay is active; tree-shaken in
+   * production code paths that never access it.
+   */
+  debugKind?: 'tile' | 'prop-object' | 'prop-wall' | 'entity';
 
   /**
    * Render this object onto the canvas.

@@ -364,3 +364,14 @@ const { state: nextState } = placeProp(state, def, tileX, tileY, rotation);
 ## Prop sounds
 
 See [adding-audio.md](./adding-audio.md#prop-sounds) for wiring prop events (`PROP_DESTROYED`, `PROP_DAMAGED`, `PROP_STATE_CHANGED`, `PROP_CONTAINER_OPENED`) to audio playback.
+
+---
+
+## Tuning collision and depth ordering
+
+After placing a prop, use the in-game debug overlays to verify and tune its hitbox and draw order:
+
+- **`\` (backslash)** — shows the collision AABB (orange = full-tile, yellow = sub-tile `solidInset` box, green = player).
+- **`` ` `` (backtick)** — shows the `sortY` line each prop uses for depth ordering.
+
+See [debug-overlays.md](./debug-overlays.md) for the full workflow, including how to tune `solidInset` and `sortYOffset` together.

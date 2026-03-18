@@ -50,6 +50,7 @@ import { getSourceRect }                      from '../sprites/SpriteSheet';
 import { PLAYER_HITBOX }                      from '../../world/TileCollision';
 import { lerp, getViewportTileBounds }        from '../ViewportUtils';
 import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from '../../world/WorldConstants';
+import { getPropDefinition }                   from '../../data/propDefinitions';
 
 // ─── Tile collector ───────────────────────────────────────────────────────────
 
@@ -111,6 +112,7 @@ function collectTileObjects(
 
         objects.push({
           sortY,
+          debugKind: 'tile',
           draw(ctx, scale) {
             const dstX = Math.round( capturedTX * TILE_SIZE                         * scale);
             const dstY = Math.round((capturedTY * TILE_SIZE + capturedDraw.yOffset) * scale);
@@ -135,10 +137,11 @@ function collectTileObjects(
  * (see GroundLayer.drawFloorProps).
  *
  * sortY formula per layer:
- *   object  → (prop.y + prop.height) * TILE_SIZE
- *             Foot at the bottom edge of the occupied footprint.
+ *   object  → (prop.y + prop.height) * TILE_SIZE + sortYOffset
+ *             Foot at the bottom edge of the footprint, shifted by the optional
+ *             sortYOffset from PropDefinition (default 0).
  *
- *   wall    → (prop.y + prop.height) * TILE_SIZE + WALL_PROP_SORT_BIAS
+ *   wall    → (prop.y + prop.height) * TILE_SIZE + sortYOffset + WALL_PROP_SORT_BIAS
  *             Slightly after the wall tile at the same row, so the painting
  *             draws on top of the wall surface.  Still sorts correctly with
  *             entities — those whose feet are south of the wall appear in front.
@@ -172,6 +175,7 @@ function collectPropObjects(
 
       objects.push({
         sortY,
+        debugKind: prop.layer === 'wall' ? 'prop-wall' : 'prop-object',
         draw(ctx, scale) {
           const dstY = Math.round(capturedProp.y * TILE_SIZE * scale);
           const sw   = capturedTr.sectionWidth;
@@ -215,9 +219,11 @@ function collectPropObjects(
     const capturedFrame  = frame;
     const capturedWorldX = worldX;
     const capturedWorldY = worldY;
+    const capturedKind   = prop.layer === 'wall' ? 'prop-wall' : 'prop-object' as const;
 
     objects.push({
       sortY,
+      debugKind: capturedKind,
       draw(ctx, scale) {
         const dstX = Math.round(capturedWorldX      * scale);
         const dstY = Math.round(capturedWorldY      * scale);
@@ -234,15 +240,20 @@ function collectPropObjects(
 /**
  * Compute the Y-sort key for a prop.
  *
- * object layer  → foot at bottom edge of occupied footprint
- * wall layer    → same foot + WALL_PROP_SORT_BIAS so the prop draws just after
- *                 the wall tile at the same row (on the wall face), while still
- *                 sorting behind entities approaching from the south.
+ * Base formula: (prop.y + prop.height) * TILE_SIZE — the bottom edge of the
+ * tile footprint.  An optional sortYOffset from the PropDefinition shifts this
+ * value up or down as a pure rendering tuning knob, independent of collision.
+ *
+ * object layer  → base + sortYOffset
+ * wall layer    → base + sortYOffset + WALL_PROP_SORT_BIAS  (draws just after the
+ *                 wall tile at the same row, still sorts behind southward entities)
  * floor layer   → not called here (floor props go through the ground pass)
  */
-function computePropSortY(prop: { y: number; height: number; layer: string }): number {
-  const foot = (prop.y + prop.height) * TILE_SIZE;
-  return prop.layer === 'wall' ? foot + WALL_PROP_SORT_BIAS : foot;
+function computePropSortY(prop: { y: number; height: number; layer: string; type: string }): number {
+  const def    = getPropDefinition(prop.type);
+  const base   = (prop.y + prop.height) * TILE_SIZE;
+  const offset = def?.sortYOffset ?? 0;
+  return prop.layer === 'wall' ? base + offset + WALL_PROP_SORT_BIAS : base + offset;
 }
 
 // ─── Entity collector ─────────────────────────────────────────────────────────
@@ -289,6 +300,7 @@ function collectEntityObjects(
     // of where the player "stands" and gives correct overlap with wall tiles.
     // The -4 avoids clipping effect when user is next to a y-long wall
     sortY: renderY + PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height - 4,
+    debugKind: 'entity',
     draw(ctx, scale) {
       const dstX = Math.round(renderX * scale);
       const dstY = Math.round(renderY * scale);
