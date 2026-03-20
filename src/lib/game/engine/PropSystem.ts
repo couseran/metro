@@ -50,16 +50,23 @@ function generatePropId(): EntityId {
 // ─── Collision inset helpers ──────────────────────────────────────────────────
 
 /**
- * Returns true when a prop definition uses a sub-tile pixel AABB for collision
- * (i.e. at least one side of solidInset is > 0).
+ * Returns true when a prop definition uses a sub-tile pixel AABB for collision.
+ *
+ * A sub-tile AABB (propSolidBoxes) is required whenever:
+ *   • solidInset has at least one side > 0 — the box is smaller than a full tile, OR
+ *   • solidOffset has any non-zero component — the box is shifted off the tile grid.
  *
  * When false, the prop uses the faster tile-snapped propSolidIndex.
- * When true, the prop uses propSolidBoxes and is NOT in propSolidIndex.
+ * When true,  the prop uses propSolidBoxes and is NOT in propSolidIndex.
  */
 function hasSubTileCollision(def: PropDefinition): boolean {
     const i = def.solidInset;
-    if (!i) return false;
-    return i.top > 0 || i.right > 0 || i.bottom > 0 || i.left > 0;
+    if (i && (i.top > 0 || i.right > 0 || i.bottom > 0 || i.left > 0)) return true;
+
+    const o = def.solidOffset;
+    if (o && (o.x !== 0 || o.y !== 0 || o.z !== 0)) return true;
+
+    return false;
 }
 
 /**
@@ -81,6 +88,31 @@ function rotateInset(i: PropCollisionInset, rotation: 0 | 1 | 2 | 3): PropCollis
         case 1: return { top: i.left,   right: i.top,    bottom: i.right,  left: i.bottom };
         case 2: return { top: i.bottom, right: i.left,   bottom: i.top,    left: i.right  };
         case 3: return { top: i.right,  right: i.bottom, bottom: i.left,   left: i.top    };
+    }
+}
+
+/**
+ * Rotate a (x, y) ground-plane offset vector to match a prop's on-screen orientation.
+ *
+ * Uses the same CW screen-space rotation convention as rotateInset so the two
+ * helpers stay in lockstep.  Screen space has y pointing downward.
+ *
+ * Matrix per quarter-turn (CW, y-down):
+ *   rot0 (  0°): ( x,  y)   — identity
+ *   rot1 ( 90°CW): (-y,  x)   — right→down, down→left
+ *   rot2 (180°): (-x, -y)   — full reversal
+ *   rot3 (270°CW): ( y, -x)   — right→up,   up→left
+ *
+ * The z component of PropCollisionOffset is intentionally not handled here —
+ * it is rotation-invariant by definition and must be applied directly to the
+ * screen-Y axis without any remapping.
+ */
+function rotateOffset(x: number, y: number, rotation: 0 | 1 | 2 | 3): { x: number; y: number } {
+    switch (rotation) {
+        case 0: return {  x,  y };
+        case 1: return { x: -y, y:  x };
+        case 2: return { x: -x, y: -y };
+        case 3: return { x:  y, y: -x };
     }
 }
 
@@ -309,12 +341,24 @@ function _indexPropIntoSolidIndex(prop: PropState, solid: Set<string>): void {
 }
 
 /**
- * Add a sub-tile pixel AABB for props whose solidInset has at least one side > 0.
- * The box is the prop's effective footprint shrunk per-side by the (rotated) inset.
- * Skipped for full-tile props (those use propSolidIndex instead).
+ * Add a sub-tile pixel AABB for props that require pixel-accurate collision.
  *
- * The inset is rotated to match the prop's orientation before the box is built, so
- * the physical collision shape always aligns with the visual sprite at any rotation.
+ * This path is taken when:
+ *   • solidInset has at least one side > 0 — the box is smaller than a full tile.
+ *   • solidOffset has any non-zero component — the box is shifted off the tile grid.
+ *
+ * Full-tile props (neither inset nor offset) continue to use propSolidIndex.
+ *
+ * Build order:
+ *   1. Start from the prop's effective tile footprint (accounts for rotation).
+ *   2. Shrink per-side by the rotated solidInset (zero if not defined).
+ *   3. Translate the resulting AABB by the rotated ground-plane (x, y) components
+ *      of solidOffset, then by the rotation-invariant screen-space z component.
+ *
+ * The inset and the x/y offset share the same CW rotation convention (rotateInset /
+ * rotateOffset) so both stay aligned with the visual sprite at any orientation.
+ * The z component is applied directly to the screen-Y axis — it is never rotated
+ * because prop rotation is always a quarter-turn around that axis.
  */
 function _indexPropIntoSolidBoxes(prop: PropState, boxes: Map<EntityId, PixelBox>): void {
     const def = getPropDefinition(prop.type);
@@ -328,17 +372,30 @@ function _indexPropIntoSolidBoxes(prop: PropState, boxes: Map<EntityId, PixelBox
     // Skip if there are no solid cells in the mask
     if (!def.solidMask.some(row => row.some(Boolean))) return;
 
-    // Rotate the definition inset to match the prop's on-screen orientation.
-    const ri = rotateInset(def.solidInset!, prop.rotation);
+    // ── Step 1: rotate the inset (use zero on every side when not defined) ─────
+    const inset = def.solidInset ?? { top: 0, right: 0, bottom: 0, left: 0 };
+    const ri    = rotateInset(inset, prop.rotation);
 
+    // ── Step 2: derive box dimensions from the (rotated) effective footprint ───
     const { w, h } = getEffectiveDimensions(prop.width, prop.height, prop.rotation);
     const boxW = w * TILE_SIZE - ri.left - ri.right;
     const boxH = h * TILE_SIZE - ri.top  - ri.bottom;
-    if (boxW <= 0 || boxH <= 0) return; // inset larger than footprint — skip
+    if (boxW <= 0 || boxH <= 0) return; // inset exceeds footprint — skip
+
+    // ── Step 3: apply solidOffset ──────────────────────────────────────────────
+    // x and y are ground-plane vectors — rotate them with the prop.
+    // z is screen-space vertical — rotation-invariant, applied directly to Y.
+    let extraX = 0;
+    let extraY = 0;
+    if (def.solidOffset) {
+        const ro = rotateOffset(def.solidOffset.x, def.solidOffset.y, prop.rotation);
+        extraX = ro.x;
+        extraY = ro.y + def.solidOffset.z; // z is always a raw screen-Y shift
+    }
 
     boxes.set(prop.id, {
-        x: prop.x * TILE_SIZE + ri.left,
-        y: prop.y * TILE_SIZE + ri.top,
+        x: prop.x * TILE_SIZE + ri.left + extraX,
+        y: prop.y * TILE_SIZE + ri.top  + extraY,
         w: boxW,
         h: boxH,
     });

@@ -1,6 +1,6 @@
 import { registerPropDefinition }        from '../../../propDefinitions';
 import type { PropDefinition }           from '$lib/game/types/props';
-import { solidInset }                    from '$lib/game/types/props';
+import {solidInset, solidOffset} from '$lib/game/types/props';
 import { TileType }                      from '$lib/game/types/world';
 
 registerPropDefinition({
@@ -20,7 +20,9 @@ registerPropDefinition({
     // Shrink the collision box by 3 px on every side so the player can step
     // slightly inside the tile edge — makes the chair feel less "blocky".
     // The inset is rotated automatically when the chair is placed at 90°/180°/270°.
-    solidInset: solidInset(1,5,3,3),
+    solidInset: solidInset(3,3,3,3),
+
+    solidOffset: solidOffset(0,0,3),
 
     // ── Sort-Y offset ─────────────────────────────────────────────────────────
     // Align the visual depth crossover with the physical collision boundary:

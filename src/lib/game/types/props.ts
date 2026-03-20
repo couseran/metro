@@ -179,6 +179,47 @@ export function solidInset(a: number, b?: number, c?: number, d?: number): PropC
     return { top: a, right: b, bottom: c, left: d! };
 }
 
+// ─── Collision offset ─────────────────────────────────────────────────────────
+
+/**
+ * Three-axis pixel offset applied to the prop's collision AABB origin.
+ *
+ * x and y are ground-plane offsets and are rotated together with the prop
+ * when a rotation is applied (just like solidInset sides).
+ *
+ * z is a screen-space vertical offset that is intentionally NOT rotated.
+ * Because all prop rotations are quarter-turns around the vertical (z) axis,
+ * a z offset always means "shift the hitbox up/down on screen by this many
+ * pixels regardless of orientation".  Use it to fine-tune depth without
+ * disturbing the rotated x/y placement.
+ *
+ * Positive values shift outward in each axis convention:
+ *   x > 0  → right  (before rotation)
+ *   y > 0  → down   (before rotation, i.e. toward the viewer)
+ *   z > 0  → up on screen (lifts the AABB, rotation-invariant)
+ */
+export interface PropCollisionOffset {
+    /** Ground-plane horizontal shift in pixels (rotated with the prop). */
+    x: number;
+    /** Ground-plane vertical shift in pixels (rotated with the prop). */
+    y: number;
+    /**
+     * Screen-space vertical shift in pixels.
+     * Not affected by prop rotation — rotation is around this axis.
+     */
+    z: number;
+}
+
+/**
+ * Factory helper for PropCollisionOffset.
+ *
+ *   solidOffset(0, 4)     → x=0, y=4, z=0
+ *   solidOffset(2, 0, -3) → x=2, y=0, z=-3
+ */
+export function solidOffset(x: number, y: number, z?: number): PropCollisionOffset {
+    return { x, y, z: z ?? 0 };
+}
+
 // ─── Prop definition ──────────────────────────────────────────────────────────
 
 /**
@@ -265,6 +306,27 @@ export interface PropDefinition {
      *   solidInset(0, 4, 6, 4)   → top=0, right=4, bottom=6, left=4
      */
     solidInset?: PropCollisionInset;
+
+    /**
+     * Three-axis pixel offset applied to the collision AABB origin after
+     * solidInset has been computed.
+     *
+     * x and y shift the AABB along the ground plane and are rotated with
+     * the prop (same transform as solidInset sides).
+     *
+     * z is a screen-space vertical nudge that is intentionally rotation-
+     * invariant: because all prop rotations are quarter-turns around the
+     * vertical axis, a z offset always moves the AABB up or down on screen
+     * by the same amount regardless of orientation.
+     *
+     * Useful when the visual anchor and the physical footprint need to be
+     * decoupled on the depth axis without disturbing the rotated x/y layout.
+     *
+     * Build with the solidOffset() helper:
+     *   solidOffset(0, 4)      → x=0, y=4 px forward, z=0
+     *   solidOffset(0, 0, -3)  → lift AABB 3 px up on screen (rotation-invariant)
+     */
+    solidOffset?: PropCollisionOffset;
 
     // ── Sort-Y offset ─────────────────────────────────────────────────────────
 

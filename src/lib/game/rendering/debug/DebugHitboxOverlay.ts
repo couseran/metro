@@ -111,7 +111,9 @@ export function drawHitboxDebugOverlay(
     }
 
     // ── 2. Sub-tile prop pixel boxes (propSolidBoxes) ─────────────────────────
-    // Precise AABBs for props with any solidInset side > 0.
+    // Precise AABBs for props with any solidInset side > 0 or any solidOffset
+    // component ≠ 0.  The box already incorporates the rotated inset and offset,
+    // so drawing it as-is reflects the exact shape used by resolveMovement().
     for (const [, box] of current.propSolidBoxes) {
         drawBox(
             ctx,
