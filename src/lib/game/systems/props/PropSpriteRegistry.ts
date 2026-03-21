@@ -1,4 +1,4 @@
-// src/lib/game/rendering/props/PropSpriteRegistry.ts
+// src/lib/game/systems/props/PropSpriteRegistry.ts
 //
 // Global registry mapping prop type strings to their visual configurations.
 //

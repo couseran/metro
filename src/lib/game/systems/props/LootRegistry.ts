@@ -1,4 +1,4 @@
-// src/lib/game/data/lootTables.ts
+// src/lib/game/systems/props/LootRegistry.ts
 //
 // Loot table registry — defines what a prop drops when it is destroyed or
 // harvested, using a weighted random selection model similar to Minecraft's
@@ -96,8 +96,8 @@ const registry = new Map<string, LootTable>();
  * @throws {Error} If `table.id` is empty or `table.entries` is empty.
  */
 export function registerLootTable(table: LootTable): void {
-    if (!table.id)           throw new Error('[LootTables] table.id must be a non-empty string.');
-    if (!table.entries.length) throw new Error(`[LootTables] table "${table.id}" has no entries.`);
+    if (!table.id)           throw new Error('[LootRegistry] table.id must be a non-empty string.');
+    if (!table.entries.length) throw new Error(`[LootRegistry] table "${table.id}" has no entries.`);
     registry.set(table.id, table);
 }
 

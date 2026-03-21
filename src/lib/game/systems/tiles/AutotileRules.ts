@@ -29,8 +29,8 @@
 //     [TileType.WALL]: (n) => n === TileType.WALL || n === TileType.ARCH,
 //     [TileType.ARCH]: (n) => n === TileType.ARCH || n === TileType.WALL,
 
-import type { TilePredicateMap } from './Autotile';
-import { TileType }              from '../types/world';
+import type { TilePredicateMap } from './Autotile.ts';
+import { TileType }              from '../../types/world.ts';
 
 // ─── Tile autotile rules ──────────────────────────────────────────────────────
 

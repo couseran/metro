@@ -7,7 +7,7 @@
 import type { UniformSheetConfig }  from './SpriteSheet';
 import type { AnimationDefinition } from './AnimationController';
 import type { EntityKind }          from '../../types/entities';
-import { ADAM_SHEET, ADAM_ANIMATIONS } from './characters/adam';
+import { ADAM_SHEET, ADAM_ANIMATIONS } from '$lib/game/content/characters/adam';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

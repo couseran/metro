@@ -6,8 +6,8 @@ import type { WorldState, ChunkState } from '../types/world';
 import { TileType }                    from '../types/world';
 import { WallVariant, CarpetVariant }  from '../types/materials';
 import { CHUNK_WIDTH, CHUNK_HEIGHT, TILE_SIZE } from './WorldConstants';
-import { computeChunkVariants, NeighborBit }    from './Autotile';
-import { TILE_AUTOTILE_RULES }                  from './AutotileRules';
+import { computeChunkVariants, NeighborBit }    from '../systems/tiles/Autotile.ts';
+import { TILE_AUTOTILE_RULES }                  from '../systems/tiles/AutotileRules.ts';
 
 // ─── Autotile debug layout ────────────────────────────────────────────────────
 //

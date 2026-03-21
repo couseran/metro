@@ -1,4 +1,4 @@
-// src/lib/game/engine/PropSystem.ts
+// src/lib/game/systems/props/PropSystem.ts
 //
 // Pure functions for all prop-related simulation operations.
 //
@@ -25,9 +25,9 @@
 import type { EntityId, TileCoord }   from '$lib/game/types/primitives.ts';
 import type { PropState, PropLayerSlot, PropDefinition, GrowthStageDefinition, PropCollisionInset } from '$lib/game/types/props.ts';
 import type { ItemStack }              from '$lib/game/types/inventory.ts';
-import { getPropDefinition }           from '$lib/game/data/propDefinitions.ts';
-import { rollLoot }                    from '$lib/game/data/lootTables.ts';
-import type { PixelBox }               from '$lib/game/world/TileCollision.ts';
+import { getPropDefinition }           from '$lib/game/systems/props/PropRegistry.ts';
+import { rollLoot }                    from '$lib/game/systems/props/LootRegistry.ts';
+import type { PixelBox }               from '$lib/game/systems/tiles/TileCollision.ts';
 import { TILE_SIZE }                   from '$lib/game/world/WorldConstants.ts';
 
 // ─── GameState shape ──────────────────────────────────────────────────────────
@@ -597,7 +597,7 @@ export function damageProp(
     amount:   number,
     toolUsed: import('$lib/game/types/props.ts').ToolKind,
     toolTier: number,
-    rng:      import('$lib/game/data/lootTables.ts').RngFn,
+    rng:      import('$lib/game/systems/props/LootRegistry.ts').RngFn,
 ): DamageResult {
     const prop = state.props.get(propId);
     if (!prop || prop.health === null) return { state, destroyed: false, loot: [] };

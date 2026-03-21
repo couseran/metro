@@ -42,15 +42,15 @@ import type { WorldObject }  from '../WorldObject';
 import { sortWorldObjects }  from '../WorldObject';
 import { getTileDrawInfo, getTileRenderLayer } from '../tiles/TilesetConfig';
 import { ROOM_BUILDER_TILESET }               from '../tiles/tilesets/RoomBuilderTileset';
-import { getPropSprite }                      from '../props/PropSpriteRegistry';
-import { resolveActiveFrames }                from '../props/PropSpriteConfig';
+import { getPropSprite }                      from '$lib/game/systems/props/PropSpriteRegistry';
+import { resolveActiveFrames }                from '$lib/game/systems/props/PropSpriteConfig';
 import { WALL_PROP_SORT_BIAS }                from '../../types/props';
-import { ADAM_SHEET, ADAM_ANIMATIONS }        from '../sprites/characters/adam';
+import { ADAM_SHEET, ADAM_ANIMATIONS }        from '$lib/game/content/characters/adam';
 import { getSourceRect }                      from '../sprites/SpriteSheet';
-import { PLAYER_HITBOX }                      from '../../world/TileCollision';
+import { PLAYER_HITBOX }                      from '../../systems/tiles/TileCollision.ts';
 import { lerp, getViewportTileBounds }        from '../ViewportUtils';
 import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from '../../world/WorldConstants';
-import { getPropDefinition }                   from '../../data/propDefinitions';
+import { getPropDefinition }                   from '$lib/game/systems/props/PropRegistry';
 
 // ─── Tile collector ───────────────────────────────────────────────────────────
 

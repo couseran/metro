@@ -41,7 +41,7 @@
 
 import type { TilesetConfig } from '../TilesetConfig';
 import { TileType }           from '../../../types/world';
-import { NeighborBit }        from '../../../world/Autotile';
+import { NeighborBit }        from '../../../systems/tiles/Autotile.ts';
 import { WallVariant, CarpetVariant } from '../../../types/materials';
 
 export const ROOM_BUILDER_TILESET: TilesetConfig = {

@@ -11,9 +11,9 @@
 // to resolveMovement requires no other changes to the algorithm; the set is
 // queried alongside tile solidity in the same inner loop.
 
-import type { WorldState } from '../types/world';
-import { TileType }        from '../types/world';
-import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from './WorldConstants';
+import type { WorldState } from '../../types/world.ts';
+import { TileType }        from '../../types/world.ts';
+import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from '../../world/WorldConstants.ts';
 
 // ─── PixelBox ─────────────────────────────────────────────────────────────────
 

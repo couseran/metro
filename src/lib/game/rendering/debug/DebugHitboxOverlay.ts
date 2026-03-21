@@ -21,7 +21,7 @@
 
 import type { GameState }  from '../../engine/SimulationModule';
 import { lerp }            from '../ViewportUtils';
-import { PLAYER_HITBOX }   from '../../world/TileCollision';
+import { PLAYER_HITBOX }   from '../../systems/tiles/TileCollision.ts';
 import { TILE_SIZE }       from '../../world/WorldConstants';
 
 // ─── Colour palette ───────────────────────────────────────────────────────────

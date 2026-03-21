@@ -1,4 +1,4 @@
-// src/lib/game/rendering/sprites/characters/adam.ts
+// src/lib/game/content/characters/adam/index.ts
 //
 // All visual data specific to the Adam character:
 //   - AdamAnimationName   — the set of valid animation identifiers
@@ -20,8 +20,8 @@
 //   Row 5 │ sit_3        │ 12 cols  │ 2 angles × 6 frames @ 16px [right×6][left×6]
 //   Row 6 │ phone        │ 9 cols   │ open sequence (3) + looking idle (6)
 
-import type { UniformSheetConfig } from '../SpriteSheet';
-import type { AnimationDefinition } from '../AnimationController';
+import type { UniformSheetConfig } from '$lib/game/rendering/sprites/SpriteSheet';
+import type { AnimationDefinition } from '$lib/game/rendering/sprites/AnimationController';
 
 // ─── Animation names ──────────────────────────────────────────────────────────
 

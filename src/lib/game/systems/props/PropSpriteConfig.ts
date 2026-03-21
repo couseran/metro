@@ -1,4 +1,4 @@
-// src/lib/game/rendering/props/PropSpriteConfig.ts
+// src/lib/game/systems/props/PropSpriteConfig.ts
 //
 // Sprite configuration types for world props.
 //

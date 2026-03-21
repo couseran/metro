@@ -6,17 +6,17 @@ import type { PropState, PropLayerSlot }          from '../types/props';
 import type { EntityId }                          from '../types/primitives';
 import type { GameEvent }                         from '../types/events';
 import { createInitialWorld, SPAWN_POINT }        from '../world/WorldFactory';
-import { resolveMovement, PLAYER_HITBOX, getTileAt } from '../world/TileCollision';
+import { resolveMovement, PLAYER_HITBOX, getTileAt } from '../systems/tiles/TileCollision.ts';
 import { TILE_SIZE }                              from '../world/WorldConstants';
-import { placeProp, removeProp }                  from './PropSystem';
-import { getPropDefinition }                      from '../data/propDefinitions';
-import type { PixelBox }                          from '../world/TileCollision';
+import { placeProp, removeProp }                  from '../systems/props/PropSystem';
+import { getPropDefinition }                      from '../systems/props/PropRegistry';
+import type { PixelBox }                          from '../systems/tiles/TileCollision.ts';
 
 // ─── Prop registration (side-effect imports) ──────────────────────────────────
 // These must be imported here (the game entry point) and NOT inside
-// propDefinitions.ts — ES imports are hoisted before module body code runs,
+// PropRegistry.ts — ES imports are hoisted before module body code runs,
 // which would put them before `registry` is initialised (temporal dead zone).
-import '../data/props/furnitures/chair/PropDefinitionRegistration';
+import '../content/props/furnitures/chair/PropDefinitionRegistration';
 import {
   type PlayerState,
   createPlayer,
@@ -26,7 +26,7 @@ import {
   standUp,
   openPhone,
   closePhone,
-} from '../entities/Player';
+} from '../systems/entities/Player';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -358,7 +358,8 @@ export class SimulationModule {
         const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
         const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
         const { tx, ty, rotation } = getFrontTile(footTX, footTY, player.direction);
-        const { state: withChair } = placeProp(this.state, chairDef, tx, ty, rotation);
+        const chairRotation = rotation%2 === 1 ? rotation : 1
+        const { state: withChair } = placeProp(this.state, chairDef, tx, ty, chairRotation);
         this.state = withChair;
         break;
       }

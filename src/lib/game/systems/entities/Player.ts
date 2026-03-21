@@ -1,9 +1,9 @@
-// src/lib/game/entities/Player.ts
+// src/lib/game/systems/entities/Player.ts
 
-import type { AnimationState }       from '../rendering/sprites/AnimationController';
-import type { AdamAnimationName }    from '../rendering/sprites/characters/adam';
-import { tickAnimation, transitionAnimation } from '../rendering/sprites/AnimationController';
-import { ADAM_ANIMATIONS }           from '../rendering/sprites/characters/adam';
+import type { AnimationState }       from '$lib/game/rendering/sprites/AnimationController';
+import type { AdamAnimationName }    from '$lib/game/content/characters/adam';
+import { tickAnimation, transitionAnimation } from '$lib/game/rendering/sprites/AnimationController';
+import { ADAM_ANIMATIONS }           from '$lib/game/content/characters/adam';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

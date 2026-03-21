@@ -37,8 +37,8 @@ import { drawHitboxDebugOverlay }            from '../rendering/debug/DebugHitbo
 // ─── Prop sprite registration (side-effect imports) ───────────────────────────
 // Import here (the renderer entry point) so sprites are registered before the
 // first draw call.  Must NOT live inside PropSpriteRegistry.ts — same circular
-// dependency risk as PropDefinitionRegistration / propDefinitions.ts.
-import '../rendering/props/props/InteriorProps';
+// dependency risk as PropDefinitionRegistration / PropRegistry.ts.
+import '../content/props/furnitures/chair/SpriteRegistration';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import { registerPropSprite } from '../PropSpriteRegistry';
+import { registerPropSprite } from '$lib/game/systems/props/PropSpriteRegistry';
 
 registerPropSprite('chair', {
   frames: [

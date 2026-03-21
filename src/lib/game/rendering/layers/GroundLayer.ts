@@ -21,8 +21,8 @@ import type { CameraState }  from '../../types/world';
 import type { LoadedAssets } from '../../assets/AssetLoader';
 import { getTileDrawInfo, getTileRenderLayer } from '../tiles/TilesetConfig';
 import { ROOM_BUILDER_TILESET }               from '../tiles/tilesets/RoomBuilderTileset';
-import { getPropSprite }                      from '../props/PropSpriteRegistry';
-import { resolveActiveFrames }                from '../props/PropSpriteConfig';
+import { getPropSprite }                      from '$lib/game/systems/props/PropSpriteRegistry';
+import { resolveActiveFrames }                from '$lib/game/systems/props/PropSpriteConfig';
 import { getViewportTileBounds }              from '../ViewportUtils';
 import { TILE_SIZE, CHUNK_WIDTH, CHUNK_HEIGHT } from '../../world/WorldConstants';
 

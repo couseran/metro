@@ -1,4 +1,4 @@
-// src/lib/game/data/propDefinitions.ts
+// src/lib/game/systems/props/PropRegistry.ts
 //
 // Global registry of static prop blueprints.
 //
@@ -6,9 +6,9 @@
 // ──────────────────────────
 //  1. Define a PropDefinition object (see interface in types/props.ts).
 //  2. Call registerPropDefinition(def) — typically at module load time in a
-//     dedicated file (e.g. data/props/PropDefinitionRegistration.ts) that is imported by the
+//     dedicated file (e.g. content/props/PropDefinitionRegistration.ts) that is imported by the
 //     game's entry point.
-//  3. Register the matching sprite config in rendering/props/PropSpriteRegistry.ts
+//  3. Register the matching sprite config in systems/props/PropSpriteRegistry.ts
 //     via registerPropSprite(def.type, config).
 //
 // Registry design
@@ -31,7 +31,7 @@ const registry = new Map<string, PropDefinition>();
  * @throws {Error} If `def.type` is an empty string.
  */
 export function registerPropDefinition(def: PropDefinition): void {
-    if (!def.type) throw new Error('[PropDefinitions] def.type must be a non-empty string.');
+    if (!def.type) throw new Error('[PropRegistry] def.type must be a non-empty string.');
     registry.set(def.type, def);
 }
 
@@ -59,24 +59,3 @@ export function hasPropDefinition(type: string): boolean {
 export function allPropDefinitions(): IterableIterator<PropDefinition> {
     return registry.values();
 }
-
-// ─── Built-in definitions ─────────────────────────────────────────────────────
-//
-// This section registers a minimal set of built-in prop types so the engine
-// starts with a functional (if empty-looking) world.  Additional prop packs
-// should be registered in separate files and imported at game startup.
-//
-// To keep this file short, prop definitions are grouped into dedicated modules:
-//
-//   data/props/PropDefinitionRegistration.ts  — chairs, tables, beds, bookshelves
-//   data/props/nature.ts     — trees, rocks, bushes, plants
-//   data/props/structures.ts — doors, fences, walls, bridges
-//   data/props/containers.ts — chests, barrels, crates
-//   data/props/lighting.ts   — campfires, torches, lanterns
-//
-// (None of these files exist yet — add them as prop artwork is finalised.)
-//
-// Import registration files from the game's entry point (e.g. SimulationModule.ts),
-// NOT here — side-effect imports in this file cause a circular dependency because
-// registration files import registerPropDefinition() back from this module, and
-// ES imports are hoisted before `registry` is initialised.

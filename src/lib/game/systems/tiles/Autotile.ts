@@ -74,9 +74,9 @@
 //     autoTileMask: restrict to relevant bits to limit the number of entries needed.
 //     autoTileMap: map the relevant masked bitmask values → sprite index.
 
-import type { WorldState, ChunkState } from '../types/world';
-import { getTileAt }                   from './TileCollision';
-import { CHUNK_WIDTH, CHUNK_HEIGHT }   from './WorldConstants';
+import type { WorldState, ChunkState } from '../../types/world.ts';
+import { getTileAt }                   from './TileCollision.ts';
+import { CHUNK_WIDTH, CHUNK_HEIGHT }   from '../../world/WorldConstants.ts';
 
 // ─── Neighbor bitmask constants ───────────────────────────────────────────────
 
