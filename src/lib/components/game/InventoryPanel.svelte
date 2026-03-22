@@ -1,16 +1,20 @@
 <!--
   Player inventory panel — a Svelte component rendered outside the canvas.
-  Opens/closes with the I key (wired in GameCanvas).
+  Opens when the active interaction context is 'inventory' (F key from gameplay,
+  or pushed programmatically by dialogue / crafting flows).
   Displays a grid of slots matching the inventory's cols × rows dimensions.
   Supports drag-and-drop slot reordering via pushUIAction(MOVE_INVENTORY_SLOT).
+  Closing routes through POP_CONTEXT so the simulation can update player
+  animation (phone → idle) deterministically alongside the context change.
 -->
 <script lang="ts">
-    import { uiState }     from '$lib/game/bridge/UIStore.svelte';
+    import { uiState }      from '$lib/game/bridge/UIStore.svelte';
     import { pushUIAction } from '$lib/game/bridge/UIActionQueue';
+    import { peekContext }  from '$lib/game/systems/context/ContextSystem';
     import ItemSprite       from '$lib/components/game/ItemSprite.svelte';
 
-    const SLOT_SIZE = 48; // CSS px per grid cell
-    const GAP       = 4;  // CSS px between cells
+    const SLOT_SIZE = 24; // CSS px per grid cell
+    const GAP       = 12;  // CSS px between cells
 
     let dragFrom: number | null = $state(null);
 
@@ -32,28 +36,32 @@
     }
 
     function close() {
-        uiState.inventoryOpen = false;
+        // Route through the simulation so the player's phone animation is
+        // closed deterministically (closePhone is called in applyContextPop).
+        pushUIAction({ type: 'POP_CONTEXT' });
     }
+
+    // Derive open state from the context stack — no separate boolean flag needed.
+    const isOpen = $derived(
+        peekContext(uiState.contextStack).kind === 'inventory' &&
+        uiState.playerInventory !== null,
+    );
 </script>
 
-{#if uiState.inventoryOpen && uiState.playerInventory}
-    {@const inv = uiState.playerInventory}
+{#if isOpen}
+    {@const inv = uiState.playerInventory!}
     <!-- Backdrop -->
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div
-        class="absolute inset-0 flex items-center justify-center bg-black/40"
+        class="absolute inset-0 flex items-center justify-center"
         onclick={close}
     >
         <!-- Panel — stop click propagation so clicking the grid doesn't close -->
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
         <div
-            class="bg-gray-900 border border-gray-600 rounded-lg p-4 select-none"
+            class="bg-muted rounded-3xl p-4 select-none mb-48"
             onclick={(e) => e.stopPropagation()}
         >
-            <div class="text-white/70 text-xs font-mono uppercase tracking-widest mb-3">
-                Inventory
-            </div>
-
             <!-- Slot grid -->
             <div
                 class="grid"
@@ -65,10 +73,10 @@
                 {#each inv.slots as slot, i}
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
-                        class="relative flex items-center justify-center rounded bg-gray-800 border cursor-pointer transition-colors"
-                        class:border-gray-600={dragFrom !== i}
+                        class="relative flex items-center justify-center rounded-full border cursor-pointer bg-card transition-colors"
+                        class:border-none={dragFrom !== i}
                         class:border-white={dragFrom === i}
-                        class:bg-gray-700={slot !== null}
+                        class:bg-muted={slot !== null}
                         style="width: {SLOT_SIZE}px; height: {SLOT_SIZE}px;"
                         draggable={slot !== null}
                         ondragstart={() => onDragStart(i)}
@@ -77,10 +85,10 @@
                         ondragend={onDragEnd}
                     >
                         {#if slot}
-                            <ItemSprite itemId={slot.itemId} size={SLOT_SIZE - 10} />
+                            <ItemSprite itemId={slot.itemId} size={SLOT_SIZE * 2} />
                             {#if slot.quantity > 1}
                                 <span
-                                    class="absolute bottom-0.5 right-1 text-white text-[10px] font-mono font-bold drop-shadow"
+                                    class="absolute -bottom-1 -right-1 text-foreground text-xs text-center bg-muted-foreground rounded-full font-bold h-4 w-4"
                                 >
                                     {slot.quantity}
                                 </span>

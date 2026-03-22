@@ -6,7 +6,9 @@ import type { PropState, PropLayerSlot }          from '../types/props';
 import type { EntityId }                          from '../types/primitives';
 import type { GameEvent }                         from '../types/events';
 import type { GroundItemState }                   from '../types/groundItems';
+import type { ContextStack }                      from '../types/context';
 import { GROUND_ITEM_DESPAWN_MS }                 from '../types/groundItems';
+import { ROOT_CONTEXT }                           from '../types/context';
 import { createInitialWorld, SPAWN_POINT }        from '../world/WorldFactory';
 import { resolveMovement, PLAYER_HITBOX, getTileAt } from '../systems/tiles/TileCollision.ts';
 import { TILE_SIZE }                              from '../world/WorldConstants';
@@ -14,6 +16,14 @@ import { placeProp, damageProp, interactWithProp } from '../systems/props/PropSy
 import { getPropDefinition }                      from '../systems/props/PropRegistry';
 import { addItems, moveSlot, removeItem }         from '../systems/inventory/InventorySystem';
 import { flushUIActions }                         from '../bridge/UIActionQueue';
+import {
+    pushContext,
+    popContext,
+    peekContext,
+    canPlayerMove,
+    canPlayerInteract,
+    canOpenInventory,
+}                                                 from '../systems/context/ContextSystem';
 import type { PixelBox }                          from '../systems/tiles/TileCollision.ts';
 
 // ─── Content registration (side-effect imports) ───────────────────────────────
@@ -54,6 +64,16 @@ export interface GameState {
   groundItems:      Map<EntityId, GroundItemState>;
 
   camera:           CameraState;
+
+  /**
+   * Interaction context stack.
+   * Index 0 is always { kind: 'gameplay' }.  The top element (last index)
+   * determines which input systems are active and which UI panels are shown.
+   * All context transitions go through SimulationModule so they are
+   * deterministic, serializable, and replay-safe.
+   * Mirrored to UIStore every frame via GameLoop.syncUIStore().
+   */
+  contextStack:     ContextStack;
 }
 
 // ─── Ground item ID generation ────────────────────────────────────────────────
@@ -166,6 +186,7 @@ export class SimulationModule {
       propSolidBoxes:   new Map(),
       groundItems:      new Map(),
       camera:           { x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y, zoom: 1 },
+      contextStack:     ROOT_CONTEXT,
     };
 
     this.state     = initial;
@@ -263,8 +284,41 @@ export class SimulationModule {
           };
           break;
         }
+
+        case 'POP_CONTEXT': {
+          this.applyContextPop();
+          break;
+        }
       }
     }
+  }
+
+  // ─── Context transitions ──────────────────────────────────────────────────────
+
+  /**
+   * Pop the top interaction context and apply any side-effects to player state.
+   *
+   * Each context kind that modifies player state when it opens must reverse
+   * that modification here.  This is the single authoritative place for
+   * "on-context-close" logic — both Escape key handling and UI close buttons
+   * route through this method.
+   */
+  private applyContextPop(): void {
+    const top = peekContext(this.state.contextStack);
+    if (top.kind === 'gameplay') return; // Root context cannot be popped
+
+    const newContextStack = popContext(this.state.contextStack);
+    let { player } = this.state;
+
+    // Reverse any player state changes that were applied when this context opened
+    switch (top.kind) {
+      case 'inventory':
+        player = closePhone(player);
+        break;
+      // dialogue, container, menu: no player animation to reverse (for now)
+    }
+
+    this.state = { ...this.state, contextStack: newContextStack, player };
   }
 
   // ─── Ground item despawn ─────────────────────────────────────────────────────
@@ -307,30 +361,37 @@ export class SimulationModule {
 
   private handleKeyPress(key: string): void {
     switch (key) {
+      // ── F key — toggle inventory ───────────────────────────────────────────
       case 'KeyF': {
-        const { player } = this.state;
-        this.state = {
-          ...this.state,
-          player: player.activity === 'phone' ? closePhone(player) : openPhone(player),
-        };
+        const top = peekContext(this.state.contextStack);
+
+        if (top.kind === 'inventory') {
+          // Already in inventory — close it
+          this.applyContextPop();
+        } else if (canOpenInventory(this.state.contextStack)) {
+          // Open inventory: push context + trigger phone animation
+          const newContextStack = pushContext(
+              this.state.contextStack,
+              { kind: 'inventory', purpose: 'browse' },
+          );
+          const player = openPhone(this.state.player);
+          this.state = { ...this.state, contextStack: newContextStack, player };
+        }
+        // In any other non-openable context, F is silently ignored
         break;
       }
 
-      case 'KeyI': {
-        // Handled entirely by the Svelte layer — SimulationModule has no concept of
-        // "panel open/closed". The UIStore is imported and toggled directly here so
-        // the keybinding still lives in one place (GameCanvas handles debug keys;
-        // simulation handles gameplay keys). We import lazily to avoid a circular dep
-        // at module init time.
-        import('../bridge/UIStore.svelte').then(({ uiState }) => {
-          uiState.inventoryOpen = !uiState.inventoryOpen;
-        });
+      // ── Escape key — close active overlay ─────────────────────────────────
+      case 'Escape': {
+        this.applyContextPop();
         break;
       }
 
+      // ── E key — world interaction ──────────────────────────────────────────
       case 'KeyE': {
         const { player } = this.state;
 
+        // Stand up regardless of context — it's always safe to stand
         if (
             player.activity === 'sitting_1' ||
             player.activity === 'sitting_2' ||
@@ -339,6 +400,9 @@ export class SimulationModule {
           this.state = { ...this.state, player: standUp(player) };
           break;
         }
+
+        // World interaction is only valid in the gameplay context
+        if (!canPlayerInteract(this.state.contextStack)) break;
 
         // 1. Try to pick up a nearby ground item first.
         // 2. If nothing was picked up, try to interact with the prop in front.
@@ -616,17 +680,19 @@ export class SimulationModule {
   }
 
   private applyMovement(): void {
-    let { player } = this.state;
+    const { player, contextStack } = this.state;
 
+    // Seated animations are a player-activity lock, not a context lock
     if (
         player.activity === 'sitting_1' ||
         player.activity === 'sitting_2' ||
-        player.activity === 'sitting_3' ||
-        player.activity === 'phone'
+        player.activity === 'sitting_3'
     ) return;
 
+    // Every non-gameplay context (inventory, dialogue, menu, …) suspends movement
+    if (!canPlayerMove(contextStack)) return;
+
     const { vx, vy } = resolveMovementVector(this.heldKeys, MOVE_SPEED);
-    player = setMovement(player, vx, vy);
-    this.state = { ...this.state, player };
+    this.state = { ...this.state, player: setMovement(player, vx, vy) };
   }
 }

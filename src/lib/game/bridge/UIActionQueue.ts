@@ -19,7 +19,15 @@ export type UIAction =
      * Drop `quantity` of the item in `slotIndex` onto the ground at the
      * player's current position.
      */
-    | { type: 'DROP_ITEM'; slotIndex: number; quantity: number };
+    | { type: 'DROP_ITEM'; slotIndex: number; quantity: number }
+    /**
+     * Close the currently active overlay (inventory panel, container UI, etc.)
+     * by popping the top interaction context.
+     * Emitted by UI components when the player clicks a close button or backdrop.
+     * Routes through the simulation so player animation (e.g. closing the phone)
+     * is updated deterministically alongside the context change.
+     */
+    | { type: 'POP_CONTEXT' };
 
 const queue: UIAction[] = [];
 

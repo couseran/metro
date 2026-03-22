@@ -56,7 +56,7 @@ export function createPlayer(x: number, y: number): PlayerState {
     sitAngle:   'right',
     phoneReady: false,
     animation:  { current: 'idle_down', frameIndex: 0, timer: 0 },
-    inventory:  createInventory(1, 1),
+    inventory:  createInventory(6, 3),
   };
 }
 

@@ -9,7 +9,7 @@ import type { ItemDefinition } from '$lib/game/types/items';
 registerItem(<ItemDefinition>{
     itemId:       'chair',
     displayName:  'Chair',
-    maxStackSize: 1,
+    maxStackSize: 4,
     category:     'furniture',
     sprite: {
         // Reuses the chair prop sprite (front-facing, rotation 1).

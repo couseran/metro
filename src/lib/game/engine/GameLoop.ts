@@ -57,6 +57,7 @@ function syncUIStore(state: GameState): void {
   uiState.camera           = state.camera;
   uiState.playerInventory  = state.player.inventory;
   uiState.groundItems      = [...state.groundItems.values()];
+  uiState.contextStack     = state.contextStack;
 }
 
 // ─── GameLoop ─────────────────────────────────────────────────────────────────

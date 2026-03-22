@@ -21,7 +21,7 @@ let bluetoothContext = getBluetoothContext()
 
 
 
-<Card class="fixed z-10 top-4 left-4 max-w-screen p-0.5 rounded-full">
+<Card class="fixed z-10 top-4 left-4 max-w-screen p-1 rounded-full border-none">
 	<div
 		class="px-0 flex gap-1 items-center justify-between"
 	>
