@@ -4,7 +4,7 @@
 	import ConnectionStatus from "$lib/components/layout/ConnectionStatus.svelte";
 	import {untrack} from "svelte";
 	import {Slider} from "$lib/components/ui/slider";
-	import GameCanvas from "$lib/components/ui/GameCanvas.svelte";
+	import GameCanvas from "$lib/components/game/GameCanvas.svelte";
 
 	let bluetoothContext = getBluetoothContext()
 

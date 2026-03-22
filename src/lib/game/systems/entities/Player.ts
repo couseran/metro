@@ -2,8 +2,10 @@
 
 import type { AnimationState }       from '$lib/game/rendering/sprites/AnimationController';
 import type { AdamAnimationName }    from '$lib/game/content/characters/adam';
+import type { InventoryState }       from '$lib/game/types/inventory';
 import { tickAnimation, transitionAnimation } from '$lib/game/rendering/sprites/AnimationController';
 import { ADAM_ANIMATIONS }           from '$lib/game/content/characters/adam';
+import { createInventory }           from '$lib/game/systems/inventory/InventorySystem';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +38,9 @@ export interface PlayerState {
 
   /** Animation playback state. Owned by simulation, read by renderer. */
   animation: AnimationState;
+
+  /** Item storage — 4 columns × 3 rows = 12 slots. */
+  inventory: InventoryState;
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -51,6 +56,7 @@ export function createPlayer(x: number, y: number): PlayerState {
     sitAngle:   'right',
     phoneReady: false,
     animation:  { current: 'idle_down', frameIndex: 0, timer: 0 },
+    inventory:  createInventory(1, 1),
   };
 }
 

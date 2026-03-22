@@ -6,6 +6,8 @@ import type { InputModule }      from './InputModule.ts';
 import type { SimulationModule } from './SimulationModule';
 import type { RendererModule }   from './RendererModule';
 import type { AudioModule }      from '../audio/AudioModule';
+import { uiState } from '../bridge/UIStore.svelte';
+import type { GameState } from './SimulationModule';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,22 @@ export interface GameLoopStats {
 }
 
 type StatsCallback = (stats: GameLoopStats) => void;
+
+// ─── UI sync ──────────────────────────────────────────────────────────────────
+
+/**
+ * Mirror the relevant slice of GameState to the Svelte reactive UI store.
+ * Called every display frame (after render) so overlays and panels always
+ * show the freshest simulation data without polling.
+ *
+ * Only shallow-copies the fields the UI actually reads — the full GameState
+ * is never exposed to Svelte components.
+ */
+function syncUIStore(state: GameState): void {
+  uiState.camera           = state.camera;
+  uiState.playerInventory  = state.player.inventory;
+  uiState.groundItems      = [...state.groundItems.values()];
+}
 
 // ─── GameLoop ─────────────────────────────────────────────────────────────────
 
@@ -158,6 +176,11 @@ export class GameLoop {
         this.simulation.state,
         alpha,
     );
+
+    // ── 3b. UI state sync ─────────────────────────────────────────────────────
+    // Mirror simulation state to the Svelte reactive store every frame.
+    // Svelte components read uiState — they never reach into GameState directly.
+    syncUIStore(this.simulation.state);
 
     // ── 4. Audio event dispatch ───────────────────────────────────────────────
     // Flush all events accumulated across every simulation tick this frame and

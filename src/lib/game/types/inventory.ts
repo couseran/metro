@@ -4,31 +4,34 @@
 
 /**
  * A single inventory slot holding a stackable item.
- * Item definitions (name, icon, effect) live in a separate definition table
+ * Item definitions (name, icon, effect) live in ItemRegistry,
  * referenced by `itemId` — only runtime state is stored here.
  */
 export interface ItemStack {
-  /** Key into the item definition table (e.g. "wood_log", "health_potion"). Not the display name. */
-  itemId: string;
-  /** How many of this item are in the stack. Always ≥ 1. */
-  quantity: number;
-  /** Current durability, or null if the item does not have durability (e.g. consumables). */
-  durability: number | null;
-  /** Arbitrary item-specific runtime data (enchantments, custom names, charge counts, etc.). */
-  metadata: Record<string, unknown>;
+    /** Key into the item definition table (e.g. "wood_log", "health_potion"). Not the display name. */
+    itemId: string;
+    /** How many of this item are in the stack. Always ≥ 1. */
+    quantity: number;
+    /** Current durability, or null if the item does not have durability (e.g. consumables). */
+    durability: number | null;
+    /** Arbitrary item-specific runtime data (enchantments, custom names, charge counts, etc.). */
+    metadata: Record<string, unknown>;
 }
 
 /**
- * The player's item storage, including the hotbar.
- * The hotbar is always the first `hotbarSize` slots — no separate array needed.
+ * Fixed-size item storage rendered as a rectangular grid.
+ *
+ * Grid dimensions:
+ *   cols × rows = slots.length (total capacity).
+ *
+ * The visual layout in the UI always matches cols × rows — a 4×3 inventory
+ * renders as 4 columns and 3 rows, regardless of how many slots are filled.
  */
 export interface InventoryState {
-  /** Fixed-length slot array. null indicates an empty slot. Length === maxSlots. */
-  slots: Array<ItemStack | null>;
-  /** Total number of inventory slots (hotbar + backpack). */
-  maxSlots: number;
-  /** Number of leading slots that form the hotbar (rendered as the quick-access bar). */
-  hotbarSize: number;
-  /** Index of the currently selected hotbar slot (0 to hotbarSize - 1). */
-  selectedHotbarIndex: number;
+    /** Fixed-length slot array. null indicates an empty slot. Length === cols × rows. */
+    slots: Array<ItemStack | null>;
+    /** Number of grid columns. */
+    cols: number;
+    /** Number of grid rows. */
+    rows: number;
 }

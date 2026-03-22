@@ -5,18 +5,22 @@ import type { WorldState, CameraState, TileTypeValue } from '../types/world';
 import type { PropState, PropLayerSlot }          from '../types/props';
 import type { EntityId }                          from '../types/primitives';
 import type { GameEvent }                         from '../types/events';
+import type { GroundItemState }                   from '../types/groundItems';
+import { GROUND_ITEM_DESPAWN_MS }                 from '../types/groundItems';
 import { createInitialWorld, SPAWN_POINT }        from '../world/WorldFactory';
 import { resolveMovement, PLAYER_HITBOX, getTileAt } from '../systems/tiles/TileCollision.ts';
 import { TILE_SIZE }                              from '../world/WorldConstants';
-import { placeProp, removeProp }                  from '../systems/props/PropSystem';
+import { placeProp, damageProp, interactWithProp } from '../systems/props/PropSystem';
 import { getPropDefinition }                      from '../systems/props/PropRegistry';
+import { addItems, moveSlot, removeItem }         from '../systems/inventory/InventorySystem';
+import { flushUIActions }                         from '../bridge/UIActionQueue';
 import type { PixelBox }                          from '../systems/tiles/TileCollision.ts';
 
-// ─── Prop registration (side-effect imports) ──────────────────────────────────
-// These must be imported here (the game entry point) and NOT inside
-// PropRegistry.ts — ES imports are hoisted before module body code runs,
-// which would put them before `registry` is initialised (temporal dead zone).
+// ─── Content registration (side-effect imports) ───────────────────────────────
 import '../content/props/furnitures/chair/PropDefinitionRegistration';
+import '../content/props/furnitures/chair/ItemRegistration';
+import '../content/props/furnitures/chair/LootTableRegistration';
+
 import {
   type PlayerState,
   createPlayer,
@@ -32,63 +36,41 @@ import {
 
 export interface GameState {
   player:           PlayerState;
-  tick:             number;       // monotonic tick counter
-  timestamp:        number;       // accumulated simulation time in ms
+  tick:             number;
+  timestamp:        number;
 
   world:            WorldState;
 
-  /** All active props from loaded chunks, keyed by EntityId. */
   props:            Map<EntityId, PropState>;
-
-  /**
-   * Per-tile layer occupancy index.
-   * Key: "tx,ty".  Value: PropLayerSlot with one slot per PropLayer (floor/object/wall).
-   *
-   * Updated incrementally on prop placement, removal, resize, and chunk load/unload.
-   * Used by PropSystem.canPlaceProp() and the renderer (floor prop culling).
-   */
   propLayerIndex:   Map<string, PropLayerSlot>;
-
-  /**
-   * Set of "tx,ty" keys where at least one solid prop cell currently blocks movement.
-   *
-   * Updated alongside propLayerIndex.  Queried by resolveMovement() and the NPC
-   * pathfinder for O(1) per-tile solid checks.  Automatically updated when a door
-   * toggles, a plant grows past a solid stage, or any prop is placed/removed.
-   *
-   * Only populated for props whose solidInset is undefined or all-zero (full-tile blockers).
-   * Props with any sub-tile inset use propSolidBoxes instead.
-   */
   propSolidIndex:   Set<string>;
-
-  /**
-   * Pixel-space AABBs for props with any sub-tile solidInset (at least one side > 0).
-   * Key: EntityId of the prop.
-   *
-   * These props are NOT in propSolidIndex.  resolveMovement() checks this map
-   * after the tile/propSolidIndex pass and performs pixel-accurate push-back,
-   * letting the player walk closer than a full tile boundary.
-   */
   propSolidBoxes:   Map<EntityId, PixelBox>;
 
   /**
-   * Camera position in world-space pixels — tracks the player.
-   * Kept in GameState so it is deterministic, snapshotted for interpolation,
-   * and serializable alongside the rest of the simulation.
+   * All active ground item piles in the loaded world.
+   * Keyed by EntityId.  Mirrored to UIStore after each render frame so the
+   * Svelte overlay layer can position badges in world-space CSS coordinates.
    */
+  groundItems:      Map<EntityId, GroundItemState>;
+
   camera:           CameraState;
+}
+
+// ─── Ground item ID generation ────────────────────────────────────────────────
+
+let _nextGroundItemId = 1;
+
+function generateGroundItemId(): EntityId {
+    return `gi_${_nextGroundItemId++}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
  * Shallow-clone GameState for the prevState snapshot used by the renderer.
- * Only fields that change every tick need deep cloning:
- *   - player — moves and animates each tick
- *   - camera — follows the player each tick
- * world, props, and the spatial indexes are stable between ticks and do not
- * need interpolation, so the renderer safely shares the same reference from
- * both snapshots.
+ * Only fields that change every tick need deep cloning (player, camera).
+ * Structural data (props, world, groundItems) is stable between ticks and can
+ * share the same reference in both snapshots.
  */
 function cloneState(state: GameState): GameState {
   return {
@@ -100,59 +82,33 @@ function cloneState(state: GameState): GameState {
 
 // ─── Camera ───────────────────────────────────────────────────────────────────
 
-// Half the default Adam sprite size (16×32).
-// player.x/y is the top-left of the sprite, so we shift to the visual center.
 const PLAYER_CAM_OFFSET_X = 8;
 const PLAYER_CAM_OFFSET_Y = 16;
 
-/**
- * Snap camera to player center — instant follow, no lag.
- * Replace with a lerp here when a specific camera-feel is desired.
- */
 function tickCamera(camera: CameraState, player: PlayerState): CameraState {
   return { ...camera, x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y };
 }
 
 // ─── Footstep detection ───────────────────────────────────────────────────────
 
-/**
- * Frame indices within every run_* animation clip where a foot contacts
- * the ground.  The Adam run cycle is 6 frames at 10 fps; the two contact
- * frames are 0 (left foot) and 3 (right foot).
- *
- * A FOOTSTEP event is emitted the tick the animation enters one of these
- * frames, keeping sound perfectly in sync with the sprite regardless of
- * walk speed or frame rate.
- */
 const FOOT_CONTACT_FRAMES = new Set([0, 3]);
 
-/**
- * Stable EntityId used for the local player until a proper entity registry
- * is wired up.  The audio system only needs it for future spatial SFX; the
- * current footstep handler ignores it.
- */
 const PLAYER_ENTITY_ID: EntityId = 'player';
 
-/**
- * World-space offsets from player.x/y (sprite top-left) to the centre of
- * the player's feet — used to sample the tile they are standing on.
- *
- * PLAYER_FOOT_OFFSET_X  = half the sprite width (16 / 2)
- * PLAYER_FOOT_OFFSET_Y  = hitbox top + half hitbox height (24 + 4)
- */
 const PLAYER_FOOT_OFFSET_X = 8;
 const PLAYER_FOOT_OFFSET_Y = PLAYER_HITBOX.offsetY + PLAYER_HITBOX.height / 2; // 28
 
+// ─── Proximity constants ──────────────────────────────────────────────────────
+
+/** Maximum distance in world-space pixels to pick up a ground item. */
+const PICKUP_RANGE_PX = TILE_SIZE * 1.5; // 24 px
+
 // ─── Input → Velocity mapping ─────────────────────────────────────────────────
 
-const MOVE_SPEED = 55; // px/sec
+const MOVE_SPEED = 55;
 
 interface MovementVector { vx: number; vy: number; }
 
-/**
- * Derive a movement vector from the current set of held keys.
- * Normalizes diagonal movement so speed is consistent in all directions.
- */
 function resolveMovementVector(heldKeys: Set<string>, speed: number): MovementVector {
   let vx = 0;
   let vy = 0;
@@ -162,7 +118,6 @@ function resolveMovementVector(heldKeys: Set<string>, speed: number): MovementVe
   if (heldKeys.has('ArrowUp')    || heldKeys.has('KeyW')) vy -= 1;
   if (heldKeys.has('ArrowDown')  || heldKeys.has('KeyS')) vy += 1;
 
-  // Normalize diagonal — without this, diagonal movement is ~41% faster
   if (vx !== 0 && vy !== 0) {
     const INV_SQRT2 = 0.7071067811865476;
     vx *= INV_SQRT2;
@@ -174,16 +129,6 @@ function resolveMovementVector(heldKeys: Set<string>, speed: number): MovementVe
 
 // ─── Debug helpers ────────────────────────────────────────────────────────────
 
-/**
- * Return the tile directly in front of the player and the chair rotation that
- * would face the player from that tile.
- *
- * Rotation convention (matches InteriorProps.ts sprite order):
- *   0 = chair front faces south  (player looks north  / 'up')
- *   1 = chair front faces west   (player looks east   / 'right')
- *   2 = chair front faces north  (player looks south  / 'down')
- *   3 = chair front faces east   (player looks west   / 'left')
- */
 function getFrontTile(
     footTX:    number,
     footTY:    number,
@@ -203,18 +148,8 @@ export class SimulationModule {
   state:     GameState;
   prevState: GameState;
 
-  // Tracks which keys are currently held — rebuilt each tick from the input queue.
-  // Separate from the event queue: events are momentary, heldKeys is continuous.
   private heldKeys: Set<string> = new Set();
 
-  /**
-   * One-way event queue: simulation → audio / UI / renderer side-effects.
-   *
-   * Events are pushed here during each tick and drained once per display frame
-   * by the game loop via flushEvents().  Using a module-level buffer (rather
-   * than storing events inside GameState) keeps GameState purely immutable and
-   * mirrors the InputModule.flush() pattern already in use.
-   */
   private pendingEvents: GameEvent[] = [];
 
   constructor() {
@@ -229,6 +164,7 @@ export class SimulationModule {
       propLayerIndex:   new Map(),
       propSolidIndex:   new Set(),
       propSolidBoxes:   new Map(),
+      groundItems:      new Map(),
       camera:           { x: player.x + PLAYER_CAM_OFFSET_X, y: player.y + PLAYER_CAM_OFFSET_Y, zoom: 1 },
     };
 
@@ -238,14 +174,6 @@ export class SimulationModule {
 
   // ─── Event queue ────────────────────────────────────────────────────────────
 
-  /**
-   * Return all events accumulated since the last call and clear the buffer.
-   *
-   * Called by the game loop once per display frame, after all simulation ticks
-   * for that frame have run.  Because multiple ticks may occur per frame (on
-   * slow hardware), events from every tick accumulate here and are delivered
-   * together — no events are lost between frames.
-   */
   flushEvents(): GameEvent[] {
     if (this.pendingEvents.length === 0) return [];
     const events = this.pendingEvents;
@@ -255,24 +183,11 @@ export class SimulationModule {
 
   // ─── Main tick ──────────────────────────────────────────────────────────────
 
-  /**
-   * Advance the simulation by one fixed timestep.
-   * Called exclusively by the GameLoop — never by the renderer or UI.
-   *
-   * Order of operations:
-   *   1. Snapshot previous state for renderer interpolation
-   *   2. Process input events (update heldKeys, fire one-shot actions)
-   *   3. Apply continuous input (movement)
-   *   4. Tick entities
-   *   5. Update camera
-   *
-   * Given identical state + inputs, this always produces identical output. (determinism)
-   *
-   * @param dt     - Fixed timestep in ms (typically 16.67ms — see GameLoop)
-   * @param inputs - Input events flushed from InputModule for this tick
-   */
   tick(dt: number, inputs: InputEvent[]): void {
     this.prevState = cloneState(this.state);
+
+    // Drain UI actions first — inventory operations from the Svelte layer
+    this.handleUIActions();
 
     this.applyInputEvents(inputs);
     this.applyMovement();
@@ -280,8 +195,6 @@ export class SimulationModule {
     let { player } = this.state;
     player = tickPlayer(player, dt);
 
-    // Integrate velocity and resolve tile + prop collisions on each axis independently.
-    // Done here (not inside tickPlayer) so collision has access to the full world state.
     const { x, y } = resolveMovement(
         player.x, player.y,
         player.vx, player.vy,
@@ -293,10 +206,6 @@ export class SimulationModule {
     );
     player = { ...player, x, y };
 
-    // ── Footstep events ───────────────────────────────────────────────────────
-    // Emit a FOOTSTEP when the animation enters a foot-contact frame.
-    // Comparing against prevState (snapped at the start of this tick) ensures
-    // we fire exactly once per frame transition, never on held frames.
     this.collectFootstepEvent(this.prevState.player.animation, player);
 
     const camera = tickCamera(this.state.camera, player);
@@ -308,6 +217,79 @@ export class SimulationModule {
       tick:      this.state.tick + 1,
       timestamp: this.state.timestamp + dt,
     };
+
+    // Tick ground item despawn timers
+    this.tickGroundItems(dt);
+  }
+
+  // ─── UI action handling ──────────────────────────────────────────────────────
+
+  private handleUIActions(): void {
+    const actions = flushUIActions();
+    if (actions.length === 0) return;
+
+    for (const action of actions) {
+      switch (action.type) {
+        case 'MOVE_INVENTORY_SLOT': {
+          const newInv = moveSlot(this.state.player.inventory, action.from, action.to);
+          this.state = { ...this.state, player: { ...this.state.player, inventory: newInv } };
+          break;
+        }
+
+        case 'DROP_ITEM': {
+          const slot = this.state.player.inventory.slots[action.slotIndex];
+          if (!slot) break;
+
+          const qty    = Math.min(action.quantity, slot.quantity);
+          const newInv = removeItem(this.state.player.inventory, action.slotIndex, qty);
+
+          // Spawn the dropped item at the player's feet
+          const gi: GroundItemState = {
+            id:           generateGroundItemId(),
+            itemId:       slot.itemId,
+            quantity:     qty,
+            x:            this.state.player.x + PLAYER_FOOT_OFFSET_X,
+            y:            this.state.player.y + PLAYER_FOOT_OFFSET_Y,
+            despawnTimer: GROUND_ITEM_DESPAWN_MS,
+          };
+
+          const newGroundItems = new Map(this.state.groundItems);
+          newGroundItems.set(gi.id, gi);
+
+          this.state = {
+            ...this.state,
+            player:      { ...this.state.player, inventory: newInv },
+            groundItems: newGroundItems,
+          };
+          break;
+        }
+      }
+    }
+  }
+
+  // ─── Ground item despawn ─────────────────────────────────────────────────────
+
+  private tickGroundItems(dt: number): void {
+    const { groundItems } = this.state;
+    if (groundItems.size === 0) return;
+
+    const newGroundItems = new Map(groundItems);
+    let changed = false;
+
+    for (const [id, item] of newGroundItems) {
+      const newTimer = item.despawnTimer - dt;
+      if (newTimer <= 0) {
+        newGroundItems.delete(id);
+        changed = true;
+      } else {
+        newGroundItems.set(id, { ...item, despawnTimer: newTimer });
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.state = { ...this.state, groundItems: newGroundItems };
+    }
   }
 
   // ─── Input processing ────────────────────────────────────────────────────────
@@ -323,92 +305,311 @@ export class SimulationModule {
     }
   }
 
-  /**
-   * One-shot key actions — fired once on keydown, not repeated while held.
-   * Movement is NOT handled here — it's continuous and lives in applyMovement.
-   */
   private handleKeyPress(key: string): void {
-    let { player } = this.state;
-
     switch (key) {
-      case 'KeyF':
-        player = player.activity === 'phone' ? closePhone(player) : openPhone(player);
+      case 'KeyF': {
+        const { player } = this.state;
+        this.state = {
+          ...this.state,
+          player: player.activity === 'phone' ? closePhone(player) : openPhone(player),
+        };
         break;
+      }
 
-      case 'KeyE':
-        // Stand up if seated; future: else interact with world
+      case 'KeyI': {
+        // Handled entirely by the Svelte layer — SimulationModule has no concept of
+        // "panel open/closed". The UIStore is imported and toggled directly here so
+        // the keybinding still lives in one place (GameCanvas handles debug keys;
+        // simulation handles gameplay keys). We import lazily to avoid a circular dep
+        // at module init time.
+        import('../bridge/UIStore.svelte').then(({ uiState }) => {
+          uiState.inventoryOpen = !uiState.inventoryOpen;
+        });
+        break;
+      }
+
+      case 'KeyE': {
+        const { player } = this.state;
+
         if (
             player.activity === 'sitting_1' ||
             player.activity === 'sitting_2' ||
             player.activity === 'sitting_3'
         ) {
-          player = standUp(player);
+          this.state = { ...this.state, player: standUp(player) };
+          break;
+        }
+
+        // 1. Try to pick up a nearby ground item first.
+        // 2. If nothing was picked up, try to interact with the prop in front.
+        if (!this.tryPickupNearbyGroundItem()) {
+          this.tryInteractWithFrontProp();
         }
         break;
+      }
 
       // Temporary sit tests — remove when world interaction is implemented
-      case 'Digit1': player = sit(player, 'sitting_1', 'right'); break;
-      case 'Digit2': player = sit(player, 'sitting_2', 'left');  break;
-      case 'Digit3': player = sit(player, 'sitting_3', 'left');  break;
+      case 'Digit1': this.state = { ...this.state, player: sit(this.state.player, 'sitting_1', 'right') }; break;
+      case 'Digit2': this.state = { ...this.state, player: sit(this.state.player, 'sitting_2', 'left') };  break;
+      case 'Digit3': this.state = { ...this.state, player: sit(this.state.player, 'sitting_3', 'left') };  break;
 
-      // ── Debug: spawn / remove chair ────────────────────────────────────────
+      // ── Debug: spawn chair ─────────────────────────────────────────────────
       case 'KeyP': {
+        const { player } = this.state;
         const chairDef = getPropDefinition('chair');
         if (!chairDef) break;
         const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
         const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
         const { tx, ty, rotation } = getFrontTile(footTX, footTY, player.direction);
-        const chairRotation = rotation%2 === 1 ? rotation : 1
+        const chairRotation = rotation % 2 === 1 ? rotation : 1;
         const { state: withChair } = placeProp(this.state, chairDef, tx, ty, chairRotation);
         this.state = withChair;
         break;
       }
 
+      // ── Debug: remove chair and drop loot ─────────────────────────────────
       case 'KeyR': {
+        const { player } = this.state;
         const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
         const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
-        const { tx, ty, rotation: expectedRotation } = getFrontTile(footTX, footTY, player.direction);
+        const { tx, ty } = getFrontTile(footTX, footTY, player.direction);
         const slot   = this.state.propLayerIndex.get(`${tx},${ty}`);
         const propId = slot?.object ?? null;
         if (!propId) break;
         const prop = this.state.props.get(propId);
-        if (!prop || prop.type !== 'chair' || prop.rotation !== expectedRotation) break;
-        this.state = removeProp(this.state, propId);
+        if (!prop || prop.type !== 'chair') break;
+
+        const propWorldX = prop.x * TILE_SIZE + TILE_SIZE / 2;
+        const propWorldY = prop.y * TILE_SIZE + TILE_SIZE / 2;
+
+        const { state: newState, destroyed, loot } = damageProp(
+            this.state, propId,
+            prop.health ?? 9999,
+            'hands', 0,
+            Math.random,
+        );
+
+        if (destroyed && loot.length > 0) {
+          const { inventory: newInv, overflow } = addItems(player.inventory, loot);
+
+          const newGroundItems = new Map(newState.groundItems);
+          for (const overflowItem of overflow) {
+            const gi: GroundItemState = {
+              id:           generateGroundItemId(),
+              itemId:       overflowItem.itemId,
+              quantity:     overflowItem.quantity,
+              x:            propWorldX,
+              y:            propWorldY,
+              despawnTimer: GROUND_ITEM_DESPAWN_MS,
+            };
+            newGroundItems.set(gi.id, gi);
+          }
+
+          this.state = {
+            ...newState,
+            player:      { ...newState.player, inventory: newInv },
+            groundItems: newGroundItems,
+          };
+        } else {
+          this.state = newState;
+        }
         break;
       }
     }
+  }
 
-    this.state = { ...this.state, player };
+  // ─── Ground item pickup ──────────────────────────────────────────────────────
+
+  /**
+   * Find the closest ground item within PICKUP_RANGE_PX of the player's feet.
+   * If found, add as much as possible to the player's inventory.
+   * Items that don't fit remain on the ground with reduced quantity.
+   *
+   * @returns true if any item was picked up (even partially).
+   */
+  private tryPickupNearbyGroundItem(): boolean {
+    const { player, groundItems } = this.state;
+    const playerCX = player.x + PLAYER_FOOT_OFFSET_X;
+    const playerCY = player.y + PLAYER_FOOT_OFFSET_Y;
+
+    // Find the closest ground item pile in range
+    let closestId:   EntityId | null = null;
+    let closestDist: number          = PICKUP_RANGE_PX;
+
+    for (const [id, item] of groundItems) {
+      const dx   = item.x - playerCX;
+      const dy   = item.y - playerCY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestId   = id;
+      }
+    }
+
+    if (!closestId) return false;
+
+    const item = groundItems.get(closestId)!;
+    const { inventory: newInv, overflow } = addItems(player.inventory, [
+      { itemId: item.itemId, quantity: item.quantity, durability: null, metadata: {} },
+    ]);
+
+    // Check how much was actually added
+    const overflowQty   = overflow.length > 0 ? overflow[0].quantity : 0;
+    const pickedUpQty   = item.quantity - overflowQty;
+
+    if (pickedUpQty === 0) {
+      // Inventory has no room at all for this item type
+      this.pendingEvents.push({ type: 'INVENTORY_FULL', entityId: PLAYER_ENTITY_ID });
+      return false;
+    }
+
+    const newGroundItems = new Map(groundItems);
+
+    if (overflowQty === 0) {
+      // Fully picked up — remove the ground pile
+      newGroundItems.delete(closestId);
+    } else {
+      // Partially picked up — reduce the pile quantity
+      newGroundItems.set(closestId, { ...item, quantity: overflowQty });
+    }
+
+    this.pendingEvents.push({
+      type:     'INVENTORY_ITEM_ADDED',
+      entityId: PLAYER_ENTITY_ID,
+      items:    [{ itemId: item.itemId, quantity: pickedUpQty, durability: null, metadata: {} }],
+    });
+
+    this.state = {
+      ...this.state,
+      player:      { ...player, inventory: newInv },
+      groundItems: newGroundItems,
+    };
+
+    return true;
+  }
+
+  // ─── Prop interaction ─────────────────────────────────────────────────────────
+
+  /**
+   * Interact with the prop occupying the tile directly in front of the player.
+   *
+   * Behaviour per interactionType:
+   *   destructible → one-hit destroy; loot goes to inventory; overflow drops on floor.
+   *   seat         → player sits down.
+   *   door/light   → delegate to interactWithProp() (toggles state).
+   *   container    → emit PROP_CONTAINER_OPENED (UI layer opens the chest panel).
+   */
+  private tryInteractWithFrontProp(): void {
+    const { player } = this.state;
+    const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
+    const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
+    const { tx, ty } = getFrontTile(footTX, footTY, player.direction);
+
+    const slot   = this.state.propLayerIndex.get(`${tx},${ty}`);
+    const propId = slot?.object ?? slot?.floor ?? null;
+    if (!propId) return;
+
+    const prop = this.state.props.get(propId);
+    if (!prop) return;
+
+    const def = getPropDefinition(prop.type);
+    if (!def) return;
+
+    switch (def.interactionType) {
+      case 'seat': {
+        // Sit facing the chair. Rotation 3 (facing east) → player sits with angle 'left'.
+        const angle: 'right' | 'left' = prop.rotation === 3 ? 'left' : 'right';
+        this.state = { ...this.state, player: sit(player, 'sitting_1', angle) };
+        break;
+      }
+
+      case 'destructible': {
+        const propWorldX = prop.x * TILE_SIZE + TILE_SIZE / 2;
+        const propWorldY = prop.y * TILE_SIZE + TILE_SIZE / 2;
+
+        const { state: newState, destroyed, loot } = damageProp(
+            this.state, propId,
+            prop.health ?? 9999,   // one-hit kill for now
+            'hands', 0,
+            Math.random,           // TODO: replace with seeded RNG
+        );
+
+        if (destroyed && loot.length > 0) {
+          const { inventory: newInv, overflow } = addItems(player.inventory, loot);
+
+          const newGroundItems = new Map(newState.groundItems);
+          for (const overflowItem of overflow) {
+            const gi: GroundItemState = {
+              id:           generateGroundItemId(),
+              itemId:       overflowItem.itemId,
+              quantity:     overflowItem.quantity,
+              x:            propWorldX,
+              y:            propWorldY,
+              despawnTimer: GROUND_ITEM_DESPAWN_MS,
+            };
+            newGroundItems.set(gi.id, gi);
+          }
+
+          if (loot.length > overflow.length || (loot.length > 0 && overflow.length === 0)) {
+            this.pendingEvents.push({
+              type:     'INVENTORY_ITEM_ADDED',
+              entityId: PLAYER_ENTITY_ID,
+              items:    loot,
+            });
+          }
+
+          this.state = {
+            ...newState,
+            player:      { ...newState.player, inventory: newInv },
+            groundItems: newGroundItems,
+          };
+        } else {
+          this.state = newState;
+        }
+
+        this.pendingEvents.push({
+          type:     'PROP_DESTROYED',
+          propId,
+          position: { x: prop.x, y: prop.y },
+          loot,
+        });
+        break;
+      }
+
+      default: {
+        // door, container, light, sign, etc. — delegate to PropSystem
+        const result = interactWithProp(this.state, propId, PLAYER_ENTITY_ID);
+
+        if (result.event === 'PROP_STATE_CHANGED' && result.from !== undefined && result.to !== undefined) {
+          this.pendingEvents.push({ type: 'PROP_STATE_CHANGED', propId, from: result.from, to: result.to });
+        } else if (result.event === 'PROP_CONTAINER_OPENED') {
+          this.pendingEvents.push({ type: 'PROP_CONTAINER_OPENED', propId, playerId: PLAYER_ENTITY_ID });
+        }
+
+        this.state = result.state;
+        break;
+      }
+    }
   }
 
   // ─── Footstep helper ─────────────────────────────────────────────────────────
 
-  /**
-   * Emit a FOOTSTEP event if the player's animation just entered a foot-contact
-   * frame during this tick.
-   *
-   * @param prevAnim - Animation state at the START of this tick (from prevState)
-   * @param player   - Player state at the END of this tick (post-tickPlayer + collision)
-   */
   private collectFootstepEvent(
       prevAnim: { current: string; frameIndex: number },
       player:   PlayerState,
   ): void {
     const { animation } = player;
 
-    // Only fire during run animations
     if (!animation.current.startsWith('run_')) return;
 
-    // Frame must have advanced or animation must have changed (transition resets to 0)
     const frameChanged =
         animation.frameIndex !== prevAnim.frameIndex ||
         animation.current    !== prevAnim.current;
 
     if (!frameChanged || !FOOT_CONTACT_FRAMES.has(animation.frameIndex)) return;
 
-    // Sample the tile under the player's feet
-    const footTX = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
-    const footTY = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
+    const footTX   = Math.floor((player.x + PLAYER_FOOT_OFFSET_X) / TILE_SIZE);
+    const footTY   = Math.floor((player.y + PLAYER_FOOT_OFFSET_Y) / TILE_SIZE);
     const tileType = getTileAt(this.state.world, footTX, footTY) as TileTypeValue;
 
     this.pendingEvents.push({ type: 'FOOTSTEP', entityId: PLAYER_ENTITY_ID, tileType });

@@ -70,4 +70,20 @@ export type GameEvent =
     | { type: 'ENTITY_SPAWNED';        entityId: EntityId }
 
     /** Emitted when an entity is removed from the world (death, despawn, disconnect). */
-    | { type: 'ENTITY_REMOVED';        entityId: EntityId };
+    | { type: 'ENTITY_REMOVED';        entityId: EntityId }
+
+    // ── Inventory ────────────────────────────────────────────────────────────
+
+    /**
+     * Emitted when one or more items are added to an entity's inventory
+     * (pickup, loot collection, trade, etc.).
+     * Handlers may play a pick-up sound or show a brief item-gained animation.
+     */
+    | { type: 'INVENTORY_ITEM_ADDED';  entityId: EntityId; items: ItemStack[] }
+
+    /**
+     * Emitted when an entity tries to pick up or receive items but their
+     * inventory has no free slots.
+     * Handlers should show a "Inventory full" notification in the UI.
+     */
+    | { type: 'INVENTORY_FULL';        entityId: EntityId };
